@@ -10,7 +10,8 @@ import pandas as pd
 from ..models.base import BaseRuleEnsemble
 from ..models.competing_risks import RuleCompetingRisks
 
-def plot_rule_importance(model: BaseRuleEnsemble,
+def plot_rule_importance(rules: Union[Dict[Tuple[int, int], List[str]], BaseRuleEnsemble],
+                        importances: Optional[Dict[Tuple[int, int], np.ndarray]] = None,
                         top_n: int = 10,
                         figsize: tuple = (10, 6)):
     """
@@ -18,8 +19,10 @@ def plot_rule_importance(model: BaseRuleEnsemble,
     
     Parameters
     ----------
-    model : BaseRuleEnsemble
-        Fitted model
+    rules : dict or BaseRuleEnsemble
+        Either a dictionary mapping transitions to rules or a fitted model
+    importances : dict, optional
+        Dictionary mapping transitions to rule importances
     top_n : int, default=10
         Number of top rules to plot
     figsize : tuple, default=(10, 6)
@@ -30,29 +33,43 @@ def plot_rule_importance(model: BaseRuleEnsemble,
     matplotlib.figure.Figure
         The figure object
     """
-    rules = model.get_rules()
-    
-    # Handle different model types
-    if hasattr(model, 'rule_weights_') and isinstance(model.rule_weights_, dict):
-        # For competing risks models, average weights across events
-        weights = np.zeros(len(rules))
-        for event_weights in model.rule_weights_.values():
-            weights += np.abs(event_weights)
-        weights /= len(model.rule_weights_)
+    if isinstance(rules, BaseRuleEnsemble):
+        # Get rules and importances from model
+        rules_dict = rules.rules_
+        importances_dict = rules.rule_importances_
     else:
-        # For standard survival models
-        weights = model.rule_weights_
+        rules_dict = rules
+        importances_dict = importances
+    
+    if not importances_dict:
+        raise ValueError("No importances provided")
+    
+    # Flatten rules and importances
+    flat_rules = []
+    flat_importances = []
+    for transition, trans_rules in rules_dict.items():
+        if transition in importances_dict and len(trans_rules) > 0:
+            flat_rules.extend([f"{transition}: {rule}" for rule in trans_rules])
+            flat_importances.extend(importances_dict[transition])
+    
+    if not flat_rules:
+        # If no rules, create a dummy plot
+        fig = plt.figure(figsize=figsize)
+        plt.text(0.5, 0.5, "No rules found", ha='center', va='center')
+        plt.axis('off')
+        return fig
     
     # Get top rules
-    idx = np.argsort(np.abs(weights))[-top_n:]
-    top_rules = [rules[i] for i in idx]
-    top_weights = weights[idx]
+    top_n = min(top_n, len(flat_rules))
+    idx = np.argsort(np.abs(flat_importances))[-top_n:]
+    top_rules = [flat_rules[i] for i in idx]
+    top_importances = np.array(flat_importances)[idx]
     
     # Create plot
     fig = plt.figure(figsize=figsize)
-    plt.barh(range(len(top_rules)), np.abs(top_weights))
+    plt.barh(range(len(top_rules)), np.abs(top_importances))
     plt.yticks(range(len(top_rules)), top_rules)
-    plt.xlabel("Absolute Weight")
+    plt.xlabel("Absolute Importance")
     plt.title("Rule Importance")
     plt.tight_layout()
     return fig
@@ -129,6 +146,7 @@ def plot_cumulative_incidence(model: BaseRuleEnsemble,
 def plot_state_transitions(model: BaseRuleEnsemble,
                          X: Union[np.ndarray, pd.DataFrame],
                          time: float,
+                         initial_state: int = 0,
                          figsize: tuple = (10, 6)) -> None:
     """
     Plot state transition diagram with probabilities
@@ -141,6 +159,8 @@ def plot_state_transitions(model: BaseRuleEnsemble,
         Data to predict for
     time : float
         Time at which to plot state occupation probabilities
+    initial_state : int, default=0
+        Initial state for prediction
     figsize : tuple, default=(10, 6)
         Figure size
     """
@@ -148,7 +168,7 @@ def plot_state_transitions(model: BaseRuleEnsemble,
         raise ValueError("Time cannot be negative")
         
     # Get predictions
-    state_occupation = model.predict_state_occupation(X, np.array([time]))
+    state_occupation = model.predict_state_occupation(X, np.array([time]), initial_state=initial_state)
     
     # Create plot
     plt.figure(figsize=figsize)
@@ -163,7 +183,7 @@ def plot_state_transitions(model: BaseRuleEnsemble,
         y = radius * np.sin(angles[i])
         
         # Plot state circle
-        state_idx = i + 1  # Convert to 1-based indexing
+        state_idx = i  # Use 0-based indexing
         plt.plot(x, y, 'o', markersize=20,
                 label=f"{state} ({state_occupation[state_idx].mean():.2f})")
         
@@ -172,18 +192,14 @@ def plot_state_transitions(model: BaseRuleEnsemble,
     
     # Plot transitions
     for from_state, to_state in model.state_structure.transitions:
-        if (from_state, to_state) in model.rule_weights_:
+        if (from_state, to_state) in model.rules_:
             # Get transition probability
-            risk_scores = np.exp(np.dot(model._evaluate_rules(X),
-                                      model.rule_weights_[(from_state, to_state)]))
-            hazard_at_t = np.interp(time, model.baseline_hazards_[(from_state, to_state)][0],
-                                  model.baseline_hazards_[(from_state, to_state)][1],
-                                  left=0, right=0)
-            prob = 1 - np.exp(-hazard_at_t * risk_scores.mean())
+            hazard = model.predict_transition_hazard(X, np.array([time]), from_state, to_state)
+            prob = 1 - np.exp(-hazard.mean())
             
             # Plot arrow
-            start_angle = angles[from_state - 1]  # Convert to 0-based indexing
-            end_angle = angles[to_state - 1]  # Convert to 0-based indexing
+            start_angle = angles[from_state]  # Use 0-based indexing
+            end_angle = angles[to_state]  # Use 0-based indexing
             
             start_x = radius * np.cos(start_angle)
             start_y = radius * np.sin(start_angle)
