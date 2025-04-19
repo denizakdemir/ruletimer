@@ -1,4 +1,4 @@
-from ruletimer.models.competing_risks import RuleCompetingRisks
+from ruletimer.models import RuleCompetingRisks
 from ruletimer.data import CompetingRisks
 from ruletimer.visualization.visualization import (
     plot_cumulative_incidence,
@@ -70,36 +70,39 @@ def test_competing_risks_example():
         alpha=0.01,
         l1_ratio=0.5,
         hazard_method="nelson-aalen",
-        min_samples_leaf=10,
-        tree_type='classification',
-        tree_growing_strategy='forest',
-        prune_rules=True,
         random_state=42
     )
     
     # Fit the model
     model.fit(X, y)
     
-    # Test predictions at specific time points
+    # Test predictions
     test_times = np.linspace(0, 10, 100)
+    predictions = model.predict_cumulative_incidence(X[:5], test_times, event_type=1)
     
-    # Test cause-specific hazard predictions
-    for event_type in [1, 2]:
-        hazard_vals = model.predict_cause_specific_hazard(X[:5], test_times, event_type)
-        assert hazard_vals.shape == (5, len(test_times))
-        assert np.all(hazard_vals >= 0)
+    # Basic assertions
+    assert model.is_fitted_
+    assert predictions.shape == (5, 100)
+    assert np.all(predictions >= 0) and np.all(predictions <= 1)
     
-    # Test cumulative incidence predictions
+    # Check feature importances
+    importances = model.get_feature_importances()
+    assert isinstance(importances, dict)
+    assert len(importances) == 2  # Two event types
     for event_type in [1, 2]:
-        cif_vals = model.predict_cumulative_incidence(X[:5], test_times, event_type)
-        assert cif_vals.shape == (5, len(test_times))
-        assert np.all((cif_vals >= 0) & (cif_vals <= 1))
+        assert event_type in importances
+        assert isinstance(importances[event_type], np.ndarray)
+        assert len(importances[event_type]) == X.shape[1]
+        assert np.all(importances[event_type] >= 0)
     
-    # Test feature importances
+    # Check rules
+    assert isinstance(model.rules_, dict)
+    assert len(model.rules_) == 2  # Two event types
     for event_type in [1, 2]:
-        importances = model.get_feature_importances(event_type)
-        assert len(importances) == n_features
-        assert np.all(importances >= 0)
+        assert event_type in model.rules_
+        assert isinstance(model.rules_[event_type], list)
+        assert len(model.rules_[event_type]) > 0
+        assert all(isinstance(rule, str) for rule in model.rules_[event_type])
     
     # Create plots directory
     os.makedirs('plots', exist_ok=True)

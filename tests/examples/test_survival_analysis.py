@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 import pytest
-from ruletimer.models.survival import RuleSurvivalCox
+from ruletimer.models import RuleSurvival
 from ruletimer.data import Survival
 from ruletimer.visualization.visualization import plot_rule_importance
 import os
@@ -28,10 +28,10 @@ def test_survival_analysis_example():
     
     # Generate survival times with realistic hazard function
     hazard = np.exp(
-        0.01 * X['age'] + 
-        0.01 * X['gender'] + 
-        0.005 * X['bmi'] + 
-        0.01 * X['blood_pressure'] + 
+        0.01 * X['age'] +
+        0.01 * X['gender'] +
+        0.005 * X['bmi'] +
+        0.01 * X['blood_pressure'] +
         0.02 * X['smoking']
     )
     times = np.random.exponential(scale=5/hazard)
@@ -45,30 +45,39 @@ def test_survival_analysis_example():
     y = Survival(time=times, event=events)
     
     # Initialize and fit the model with advanced parameters
-    model = RuleSurvivalCox(
+    model = RuleSurvival(
         max_rules=32,
         max_depth=4,
         n_estimators=200,
         alpha=0.01,
         l1_ratio=0.5,
         hazard_method="nelson-aalen",
-        min_samples_leaf=10,
-        tree_type='classification',
-        tree_growing_strategy='forest',
-        prune_rules=True,
         random_state=42
     )
     
     # Fit the model
     model.fit(X, y)
     
-    # Test predictions at specific time points
+    # Test predictions
     test_times = np.linspace(0, 10, 100)
+    predictions = model.predict_survival_function(X[:5], test_times)
     
-    # Test survival probability predictions
-    survival_probs = model.predict_survival(X[:5], test_times)
-    assert survival_probs.shape == (5, len(test_times))
-    assert np.all((survival_probs >= 0) & (survival_probs <= 1))
+    # Basic assertions
+    assert model.is_fitted_
+    assert predictions.shape == (5, 100)
+    assert np.all(predictions >= 0) and np.all(predictions <= 1)
+    
+    # Check feature importances
+    importances = model.get_feature_importances()
+    assert isinstance(importances, np.ndarray)
+    assert len(importances) == X.shape[1]
+    assert np.all(importances >= 0)
+    assert np.allclose(np.sum(importances), 1.0)
+    
+    # Check rules
+    assert isinstance(model.rules_, list)
+    assert len(model.rules_) > 0
+    assert all(isinstance(rule, str) for rule in model.rules_)
     
     # Test hazard predictions
     hazard_vals = model.predict_hazard(X[:5], test_times)
@@ -79,11 +88,6 @@ def test_survival_analysis_example():
     cum_hazard_vals = model.predict_cumulative_hazard(X[:5], test_times)
     assert cum_hazard_vals.shape == (5, len(test_times))
     assert np.all(cum_hazard_vals >= 0)
-    
-    # Test feature importances
-    importances = model._compute_feature_importances()
-    assert len(importances) == n_features
-    assert np.all(importances >= 0)
     
     # Test risk group predictions
     risk_scores = model.predict_hazard(X, [2.0])[:, 0]
@@ -100,7 +104,7 @@ def test_survival_analysis_example():
     # Plot survival curves for different risk groups
     for group in ['Low', 'Medium', 'High']:
         group_mask = risk_groups == group
-        group_survival = model.predict_survival(X[group_mask], test_times)
+        group_survival = model.predict_survival_function(X[group_mask], test_times)
         mean_survival = np.mean(group_survival, axis=0)
         plt.plot(test_times, mean_survival, label=f'{group} Risk')
     
@@ -161,5 +165,5 @@ def test_survival_analysis_example():
     loaded_model = joblib.load(model_path)
     
     # Verify loaded model predictions match original
-    loaded_survival = loaded_model.predict_survival(X[:5], test_times)
-    assert np.allclose(survival_probs, loaded_survival) 
+    loaded_survival = loaded_model.predict_survival_function(X[:5], test_times)
+    assert np.allclose(predictions, loaded_survival) 

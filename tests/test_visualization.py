@@ -23,8 +23,9 @@ class MockRuleEnsemble(BaseRuleEnsemble):
         self._rules_tuples = ["feature_0 <= 0.5", "feature_1 > 0.3"]
         self.rule_weights_ = np.array([0.8, -0.5])
         self.state_structure = StateStructure(
-            states=["Healthy", "Mild", "Severe"],
-            transitions=[(1, 2), (2, 3)]  # States start from 1
+            states=[1, 2, 3],  # Using 1-based indexing for states (0 is reserved for censoring)
+            transitions=[(1, 2), (2, 3)],  # States are 1-based
+            state_names=["Healthy", "Mild", "Severe"]  # Providing state names separately
         )
         self._y = np.rec.fromarrays([np.array([1.0, 2.0, 3.0])], names=['time'])
         self.baseline_hazards_ = {
@@ -50,7 +51,7 @@ class MockRuleEnsemble(BaseRuleEnsemble):
         n_samples = X.shape[0]
         n_times = len(times)
         return {
-            i+1: np.random.rand(n_samples, n_times)
+            i+1: np.random.rand(n_samples, n_times)  # States are 1-based (0 is reserved for censoring)
             for i in range(len(self.state_structure.states))
         }
     
@@ -82,7 +83,7 @@ def test_plot_cumulative_incidence(mock_model, sample_data):
     plot_cumulative_incidence(
         mock_model,
         sample_data,
-        event_types=[1, 2],
+        event_types=[0, 1],
         times=np.linspace(0, 5, 10)
     )
     assert plt.get_fignums()  # Check if figure was created
@@ -134,14 +135,14 @@ def test_plot_state_occupation_missing_state(mock_model, sample_data):
     plt.close('all')
     times = np.linspace(0, 5, 10)
     state_probs = mock_model.predict_state_occupation(sample_data, times)
-    del state_probs[1]  # Remove one state
+    del state_probs[0]  # Remove one state (changed to 0-based)
     plot_state_occupation(
         times,
         state_probs,
         state_names=mock_model.state_structure.states
     )
     assert plt.get_fignums()  # Check if figure was created
-    plt.close('all') 
+    plt.close('all')
 
 def test_plot_state_transitions_invalid_times(mock_model, sample_data):
     """Test plotting state transitions with invalid times"""
@@ -183,14 +184,14 @@ def test_plot_cumulative_incidence_custom_labels(mock_model, sample_data):
     """Test plotting cumulative incidence with custom state labels"""
     plt.close('all')
     mock_model.state_structure = StateStructure(
-        states=["Healthy", "Sick", "Recovered"],
-        transitions=[(1, 2), (2, 3)]
+        states=[1, 2, 3],  # Changed to 1-based indexing
+        transitions=[(1, 2), (2, 3)]  # Changed to 1-based indexing
     )
     times = np.linspace(0, 5, 10)
     plot_cumulative_incidence(
         mock_model,
         sample_data,
-        event_types=[1, 2],
+        event_types=[0, 1],  # Changed to 0-based indexing
         times=times
     )
     assert plt.get_fignums()  # Check if figure was created
@@ -245,8 +246,8 @@ def test_plot_rule_importance_dict_weights(mock_model):
     plt.close('all')
     mock_model._rules_tuples = ["Rule 1", "Rule 2"]
     mock_model.rule_weights_ = {
-        (1, 2): np.array([0.5, -0.3]),
-        (2, 3): np.array([0.2, 0.4])
+        (1, 2): np.array([0.5, -0.3]),  # Changed to 1-based indexing
+        (2, 3): np.array([0.2, 0.4])    # Changed to 1-based indexing
     }
     plot_rule_importance(mock_model)
     assert plt.get_fignums()  # Check if figure was created
@@ -256,7 +257,7 @@ def test_plot_cumulative_incidence_invalid_event_type(mock_model, sample_data):
     """Test plotting cumulative incidence with invalid event type"""
     plt.close('all')
     def mock_predict_cumulative_incidence(X, times, event_types):
-        if any(event_type > 2 for event_type in event_types):
+        if any(event_type > 3 for event_type in event_types):
             raise KeyError("Invalid event type")
         return {1: np.zeros((X.shape[0], len(times)))}
     mock_model.predict_cumulative_incidence = mock_predict_cumulative_incidence
@@ -274,11 +275,11 @@ def test_plot_state_transitions_no_rule_weights(mock_model, sample_data):
     plt.close('all')
     mock_model.state_structure = StateStructure(
         states=["A", "B", "C"],
-        transitions=[(1, 2), (2, 3)]
+        transitions=[(2, 3), (3, 4)]
     )
     mock_model._rules_tuples = ["Rule 1", "Rule 2"]
-    mock_model.rule_weights_ = {(1, 2): np.array([0.5, 0.3])}  # Missing (2, 3)
-    mock_model.baseline_hazards_ = {(1, 2): (np.array([0, 1]), np.array([0.1, 0.2]))}
+    mock_model.rule_weights_ = {(2, 3): np.array([0.5, 0.3])}  # Missing (3, 4)
+    mock_model.baseline_hazards_ = {(2, 3): (np.array([0, 1]), np.array([0.1, 0.2]))}
     plot_state_transitions(mock_model, sample_data, time=1.0)
     assert plt.get_fignums()  # Check if figure was created
     plt.close('all')

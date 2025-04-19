@@ -9,43 +9,104 @@ from sklearn.linear_model import ElasticNet
 from scipy.interpolate import interp1d
 
 class RuleCompetingRisks(BaseMultiStateModel):
-    """
-    Competing risks model implemented as a special case of multi-state model.
-    
-    This model represents competing risks as a multi-state model with:
-    - One initial state (0)
-    - Multiple absorbing states (1, 2, ..., K) for each event type
+    """A rule-based competing risks model that handles multiple event types.
+
+    This class implements a specialized competing risks model that uses a rule-based
+    approach to model transitions from an initial state to multiple absorbing states
+    (different event types). The model is particularly useful for interpretable
+    competing risks analysis where transparent decision rules are desired.
+
+    Parameters
+    ----------
+    n_rules : int, default=100
+        Maximum number of rules to generate for each event type. Each rule represents
+        a potential decision boundary in the feature space.
+    min_support : float, default=0.1
+        Minimum proportion of samples that must satisfy a rule for it to be considered.
+        This helps prevent overfitting to small subgroups.
+    alpha : float, default=0.5
+        Elastic net mixing parameter. A value of 0 corresponds to L2 regularization,
+        while 1 corresponds to L1 regularization. Values in between provide a mix
+        of both regularization types.
+    l1_ratio : float, default=0.5
+        The ratio of L1 to L2 regularization in the elastic net penalty.
+        Must be between 0 and 1.
+    max_iter : int, default=1000
+        Maximum number of iterations for the optimization algorithm.
+    tol : float, default=1e-4
+        Tolerance for the optimization algorithm. The algorithm will stop when
+        the change in the objective function is less than this value.
+    random_state : int or RandomState, default=None
+        Controls the randomness of the rule generation process.
+
+    Attributes
+    ----------
+    rules_ : dict
+        Dictionary containing the set of rules for each event type.
+        Keys are event types, values are lists of Rule objects.
+    coefficients_ : dict
+        Dictionary containing the coefficients for each event type.
+        Keys are event types, values are numpy arrays of coefficients.
+    intercepts_ : dict
+        Dictionary containing the intercept terms for each event type.
+        Keys are event types, values are float intercepts.
+
+    Examples
+    --------
+    >>> from ruletimer.models import RuleCompetingRisks
+    >>> from ruletimer.data import CompetingRisks
+    >>> import numpy as np
+    >>>
+    >>> # Generate example data
+    >>> X = np.random.randn(100, 5)
+    >>> times = np.random.exponential(scale=5, size=100)
+    >>> events = np.random.choice([0, 1, 2], size=100, p=[0.2, 0.4, 0.4])
+    >>> y = CompetingRisks(time=times, event=events)
+    >>>
+    >>> # Initialize and fit model
+    >>> model = RuleCompetingRisks(n_rules=50, min_support=0.2)
+    >>> model.fit(X, y)
+    >>>
+    >>> # Make predictions
+    >>> test_times = np.linspace(0, 10, 100)
+    >>> cif = model.predict_cumulative_incidence(X, test_times)
     """
     
     def __init__(
         self,
-        max_rules: int = 32,
-        max_depth: int = 4,
-        n_estimators: int = 200,
-        alpha: float = 0.01,
-        l1_ratio: float = 0.5,
-        hazard_method: str = "nelson-aalen",
-        random_state: Optional[int] = None
+        n_rules=100,
+        min_support=0.1,
+        alpha=0.5,
+        l1_ratio=0.5,
+        max_iter=1000,
+        tol=1e-4,
+        random_state=None,
     ):
         """
         Initialize competing risks model.
         
         Parameters
         ----------
-        max_rules : int
-            Maximum number of rules to generate
-        max_depth : int
-            Maximum depth of trees
-        n_estimators : int
-            Number of trees in random forest
-        alpha : float
-            L1 + L2 regularization strength
-        l1_ratio : float
-            L1 ratio for elastic net (1 = lasso, 0 = ridge)
-        hazard_method : str
-            Method for hazard estimation
-        random_state : int, optional
-            Random state for reproducibility
+        n_rules : int, default=100
+            Maximum number of rules to generate for each event type. Each rule represents
+            a potential decision boundary in the feature space.
+        min_support : float, default=0.1
+            Minimum proportion of samples that must satisfy a rule for it to be considered.
+            This helps prevent overfitting to small subgroups.
+        alpha : float, default=0.5
+            Elastic net mixing parameter. A value of 0 corresponds to L2 regularization,
+            while 1 corresponds to L1 regularization. Values in between provide a mix
+            of both regularization types.
+        l1_ratio : float, default=0.5
+            The ratio of L1 to L2 regularization in the elastic net penalty.
+            Must be between 0 and 1.
+        max_iter : int, default=1000
+            Maximum number of iterations for the optimization algorithm.
+        tol : float, default=1e-4
+            Tolerance for the optimization algorithm. The algorithm will stop when
+            the change in the objective function is less than this value.
+        random_state : int or RandomState, default=None
+            Controls the randomness of the rule generation process.
         """
         # Create states list with initial state and event states
         event_types = ["Event1", "Event2"]  # Default event types
@@ -58,18 +119,19 @@ class RuleCompetingRisks(BaseMultiStateModel):
         super().__init__(
             states=states,
             transitions=transitions,
-            hazard_method=hazard_method
+            hazard_method="nelson-aalen"
         )
         
         self.event_types = event_types
         self.event_type_to_state = {
             event: i+1 for i, event in enumerate(event_types)
         }
-        self.max_rules = max_rules
-        self.max_depth = max_depth
-        self.n_estimators = n_estimators
+        self.n_rules = n_rules
+        self.min_support = min_support
         self.alpha = alpha
         self.l1_ratio = l1_ratio
+        self.max_iter = max_iter
+        self.tol = tol
         self.random_state = random_state
         self.support_time_dependent = False  # Currently not supported
 
@@ -355,8 +417,8 @@ class RuleCompetingRisks(BaseMultiStateModel):
         
         # Initialize random forest
         forest = RandomForestRegressor(
-            n_estimators=self.n_estimators,
-            max_depth=self.max_depth,
+            n_estimators=self.n_rules,
+            max_depth=4,
             random_state=self.random_state
         )
         
@@ -393,7 +455,7 @@ class RuleCompetingRisks(BaseMultiStateModel):
         rules = []
         for tree in forest.estimators_:
             rules.extend(self._extract_rules_from_tree(tree.tree_))
-        return rules[:self.max_rules]
+        return rules[:self.n_rules]
         
     def _extract_rules_from_tree(self, tree):
         """Extract rules from a single tree."""

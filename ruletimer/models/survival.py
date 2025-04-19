@@ -13,6 +13,40 @@ class RuleSurvival(BaseMultiStateModel):
     
     This model represents standard survival analysis as a two-state model:
     Alive (0) -> Dead (1)
+
+    Parameters
+    ----------
+    hazard_method : str
+        Method for hazard estimation: "nelson-aalen" or "parametric"
+
+    Attributes
+    ----------
+    rules_ : list of Rule
+        The set of rules selected by the model during fitting.
+    coefficients_ : ndarray of shape (n_rules,)
+        The coefficients associated with each rule in the final model.
+    intercept_ : float
+        The intercept term of the model.
+
+    Examples
+    --------
+    >>> from ruletimer.models import RuleSurvival
+    >>> from ruletimer.data import Survival
+    >>> import numpy as np
+    >>>
+    >>> # Generate example data
+    >>> X = np.random.randn(100, 5)
+    >>> times = np.random.exponential(scale=5, size=100)
+    >>> events = np.random.binomial(1, 0.7, size=100)
+    >>> y = Survival(time=times, event=events)
+    >>>
+    >>> # Initialize and fit model
+    >>> model = RuleSurvival(hazard_method="nelson-aalen")
+    >>> model.fit(X, y)
+    >>>
+    >>> # Make predictions
+    >>> test_times = np.linspace(0, 10, 100)
+    >>> survival_probs = model.predict_survival(X, test_times)
     """
     
     def __init__(self, hazard_method: str = "nelson-aalen"):
