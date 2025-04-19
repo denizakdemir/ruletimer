@@ -117,8 +117,8 @@ def test_multi_state_example():
         for transition in transitions:
             f.write(f'\n{state_names[transition[0]]} → {state_names[transition[1]]}:\n')
             importances = model.get_feature_importances(transition)
-            for feature, importance in zip(X.columns, importances):
-                f.write(f'{feature}: {importance:.4f}\n')
+            for feature_idx, importance in enumerate(importances):
+                f.write(f'Feature {feature_idx}: {importance:.4f}\n')
     
     # Test model persistence
     model_path = 'plots/multi_state_model.joblib'

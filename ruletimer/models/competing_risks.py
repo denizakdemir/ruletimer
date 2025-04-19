@@ -285,21 +285,39 @@ class RuleCompetingRisks(BaseMultiStateModel):
             If event_type is specified: array of CIF values
             If event_type is None: dict mapping event types to CIF values
         """
+        if not self.is_fitted_:
+            raise ValueError("Model must be fitted before making predictions")
+            
+        # Sort times to ensure monotonicity
+        times = np.sort(times)
+        
         if event_type is not None:
             if event_type not in self.event_types:
                 raise ValueError(f"Unknown event type: {event_type}")
             state = self.event_type_to_state[event_type]
             cif = self.predict_transition_probability(X, times, 0, state)
+            
             # Ensure monotonicity
-            return np.maximum.accumulate(cif, axis=1)
+            cif = np.maximum.accumulate(cif, axis=1)
+            
+            # Ensure values are between 0 and 1
+            cif = np.clip(cif, 0, 1)
+            
+            return cif
         
         # Get CIFs for all event types
         cifs = {}
         for evt_type in self.event_types:
             state = self.event_type_to_state[evt_type]
             cif = self.predict_transition_probability(X, times, 0, state)
+            
             # Ensure monotonicity for each event type
-            cifs[evt_type] = np.maximum.accumulate(cif, axis=1)
+            cif = np.maximum.accumulate(cif, axis=1)
+            
+            # Ensure values are between 0 and 1
+            cif = np.clip(cif, 0, 1)
+            
+            cifs[evt_type] = cif
         
         # Normalize CIFs to ensure they sum to at most 1
         cif_sum = np.zeros((len(X), len(times)))
@@ -311,6 +329,10 @@ class RuleCompetingRisks(BaseMultiStateModel):
         if np.any(mask):
             for evt_type in self.event_types:
                 cifs[evt_type][mask] = cifs[evt_type][mask] / cif_sum[mask]
+        
+        # Final check to ensure all CIFs are between 0 and 1
+        for evt_type in self.event_types:
+            cifs[evt_type] = np.clip(cifs[evt_type], 0, 1)
         
         return cifs
     

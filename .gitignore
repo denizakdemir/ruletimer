@@ -54,3 +54,13 @@ htmlcov/
 # OS specific
 .DS_Store
 Thumbs.db 
+
+# Plots
+plots/
+
+# Models
+models/
+
+# Data
+data/
+

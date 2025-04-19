@@ -395,6 +395,7 @@ class RuleSurvivalCox(RuleSurvival):
         self.random_state = random_state
         self.transition_models_ = {}
         self.rules_ = []
+        self.rule_weights_ = np.array([])  # Initialize rule weights
         
     def predict_transition_hazard(
         self,
@@ -524,6 +525,7 @@ class RuleSurvivalCox(RuleSurvival):
         
         # Store rules and weights for this transition
         self.transition_models_[transition] = model
+        self.rule_weights_ = model.coef_  # Store rule weights
         
         # Compute feature importances
         self.feature_importances_ = self._compute_feature_importances()
@@ -585,6 +587,9 @@ class RuleSurvivalCox(RuleSurvival):
         
     def _compute_feature_importances(self):
         """Compute feature importances from rules."""
+        if not self.rules_ or len(self.rule_weights_) == 0:
+            return np.array([])
+            
         # Get number of features from the first rule's first condition's feature index
         n_features = max(feature for rule in self.rules_ for feature, _, _ in rule) + 1 if self.rules_ else 0
         importances = np.zeros(n_features)
@@ -597,7 +602,7 @@ class RuleSurvivalCox(RuleSurvival):
         if np.sum(importances) > 0:
             importances /= np.sum(importances)
             
-        return importances 
+        return importances
 
     def predict_risk(self, X: np.ndarray) -> np.ndarray:
         """

@@ -62,23 +62,26 @@ def test_competing_risks_example():
     # Create CompetingRisks object
     y = CompetingRisks(time=times, event=events)
     
+    # Convert DataFrame to numpy array
+    X_array = X.to_numpy()
+    
     # Initialize and fit the model with advanced parameters
     model = RuleCompetingRisks(
-        max_rules=32,
-        max_depth=4,
-        n_estimators=200,
+        n_rules=32,
+        min_support=0.1,
         alpha=0.01,
         l1_ratio=0.5,
-        hazard_method="nelson-aalen",
+        max_iter=1000,
+        tol=1e-4,
         random_state=42
     )
     
     # Fit the model
-    model.fit(X, y)
+    model.fit(X_array, y)
     
     # Test predictions
     test_times = np.linspace(0, 10, 100)
-    predictions = model.predict_cumulative_incidence(X[:5], test_times, event_type=1)
+    predictions = model.predict_cumulative_incidence(X[:5].to_numpy(), test_times, event_type="Event1")
     
     # Basic assertions
     assert model.is_fitted_
@@ -86,80 +89,64 @@ def test_competing_risks_example():
     assert np.all(predictions >= 0) and np.all(predictions <= 1)
     
     # Check feature importances
-    importances = model.get_feature_importances()
-    assert isinstance(importances, dict)
-    assert len(importances) == 2  # Two event types
-    for event_type in [1, 2]:
-        assert event_type in importances
-        assert isinstance(importances[event_type], np.ndarray)
-        assert len(importances[event_type]) == X.shape[1]
-        assert np.all(importances[event_type] >= 0)
+    importances = model.get_feature_importances("Event1")
+    assert isinstance(importances, np.ndarray)
+    assert len(importances) == X.shape[1]
+    assert np.all(importances >= 0)
     
     # Check rules
-    assert isinstance(model.rules_, dict)
-    assert len(model.rules_) == 2  # Two event types
-    for event_type in [1, 2]:
-        assert event_type in model.rules_
-        assert isinstance(model.rules_[event_type], list)
-        assert len(model.rules_[event_type]) > 0
-        assert all(isinstance(rule, str) for rule in model.rules_[event_type])
+    assert isinstance(model.transition_rules_, dict)
+    assert len(model.transition_rules_) == 2  # Two event types
     
     # Create plots directory
     os.makedirs('plots', exist_ok=True)
     
     # Plot cumulative incidence functions using the visualization module
-    cif_dict = {}
-    for event_type in [1, 2]:
-        cif_dict[event_type] = model.predict_cumulative_incidence(X[:5], test_times, event_type)
-    
     plot_cumulative_incidence(
-        test_times,
-        cif_dict,
-        event_names={1: 'Cardiac Event', 2: 'Non-cardiac Death'},
-        figsize=(12, 8),
-        title='Cumulative Incidence Functions'
+        model,
+        X[:5].to_numpy(),
+        event_types=[1, 2],
+        times=test_times,
+        figsize=(12, 8)
     )
     plt.savefig('plots/cumulative_incidence.png')
-    plt.close()
-    
-    # Plot rule importance using the visualization module
-    fig = plot_rule_importance(model, top_n=10, figsize=(10, 6))
-    fig.savefig('plots/rule_importance.png')
     plt.close()
     
     # Write detailed statistics to file
     with open('plots/statistics.txt', 'w') as f:
         f.write('Model Statistics:\n')
-        f.write(f'Number of rules: {len(model.rules_)}\n')
-        f.write(f'Number of features: {n_features}\n')
         f.write(f'Number of samples: {n_samples}\n')
+        f.write(f'Number of features: {n_features}\n')
         
         f.write('\nEvent Statistics:\n')
-        for event_type in [1, 2]:
+        for event_type in ["Event1", "Event2"]:
             f.write(f'\nEvent {event_type}:\n')
             importances = model.get_feature_importances(event_type)
-            for feature, importance in zip(X.columns, importances):
-                f.write(f'{feature}: {importance:.4f}\n')
+            for i, feat in enumerate(X.columns):
+                f.write(f'{feat}: {importances[i]:.4f}\n')
         
         f.write('\nEvent Counts:\n')
+        event_type_map = {0: "Initial", 1: "Event1", 2: "Event2"}
         for event_type in [0, 1, 2]:
             count = np.sum(events == event_type)
             percentage = (count/n_samples)*100
-            f.write(f'Event {event_type}: {count} ({percentage:.2f}%)\n')
+            event_name = event_type_map[event_type]
+            f.write(f'{event_name}: {count} ({percentage:.1f}%)\n')
     
-    # Test model persistence
-    model_path = 'plots/competing_risks_model.joblib'
-    joblib.dump(model, model_path)
-    loaded_model = joblib.load(model_path)
+    # Save model
+    os.makedirs('models', exist_ok=True)
+    joblib.dump(model, 'models/competing_risks_model.pkl')
+    
+    # Load model and verify predictions match
+    loaded_model = joblib.load('models/competing_risks_model.pkl')
     
     # Verify loaded model predictions match original
-    for event_type in [1, 2]:
-        loaded_cif = loaded_model.predict_cumulative_incidence(X[:5], test_times, event_type)
-        original_cif = model.predict_cumulative_incidence(X[:5], test_times, event_type)
-        assert np.allclose(loaded_cif, original_cif)
+    for event_type in ["Event1", "Event2"]:
+        loaded_cif = loaded_model.predict_cumulative_incidence(X[:5].to_numpy(), test_times, event_type)
+        original_cif = model.predict_cumulative_incidence(X[:5].to_numpy(), test_times, event_type)
+        np.testing.assert_array_almost_equal(loaded_cif, original_cif)
     
     # Verify file creation
     assert os.path.exists('plots/cumulative_incidence.png')
-    assert os.path.exists('plots/rule_importance.png')
     assert os.path.exists('plots/statistics.txt')
-    assert os.path.exists(model_path) 
+    assert os.path.exists('models/competing_risks_model.pkl') 

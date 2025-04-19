@@ -11,8 +11,9 @@ from ruletimer.utils.hazard_estimation import HazardEstimator
 from ruletimer.state_manager import StateManager
 from ruletimer.time_handler import TimeHandler
 from sklearn.tree import DecisionTreeClassifier
+from ruletimer.models.base import BaseRuleEnsemble
 
-class RuleMultiState(BaseMultiStateModel):
+class RuleMultiState(BaseMultiStateModel, BaseRuleEnsemble):
     """
     Rule-based multi-state time-to-event model.
     
@@ -81,11 +82,23 @@ class RuleMultiState(BaseMultiStateModel):
         if l1_ratio < 0 or l1_ratio > 1:
             raise ValueError("l1_ratio must be between 0 and 1")
             
-        super().__init__(
-            states=state_structure.states if state_structure else [],
-            transitions=state_structure.transitions if state_structure else [],
+        # Initialize with empty states and transitions if no state structure provided
+        states = []
+        transitions = []
+        state_names = []
+        if state_structure is not None:
+            states = state_structure.states
+            transitions = state_structure.transitions
+            state_names = state_structure.state_names
+            
+        # Initialize both parent classes
+        BaseMultiStateModel.__init__(
+            self,
+            states=state_names,  # Pass state names instead of states
+            transitions=transitions,
             hazard_method=hazard_method
         )
+        BaseRuleEnsemble.__init__(self)
         
         self.max_rules = max_rules
         self.alpha = alpha
@@ -103,9 +116,9 @@ class RuleMultiState(BaseMultiStateModel):
         self.max_impurity = max_impurity
         
         # Initialize rule-specific attributes
-        self.rules_: Dict[Tuple[int, int], List[str]] = {}
-        self.rule_importances_: Dict[Tuple[int, int], np.ndarray] = {}
+        self._rules_dict: Dict[Tuple[int, int], List[str]] = {}
         self.rule_coefficients_: Dict[Tuple[int, int], np.ndarray] = {}
+        self.rule_importances_: Dict[Tuple[int, int], np.ndarray] = {}
         
     def _generate_rules(self, X: np.ndarray, y: np.ndarray) -> List[str]:
         """Generate rules using decision trees.
@@ -154,32 +167,19 @@ class RuleMultiState(BaseMultiStateModel):
         unique_rules = list(dict.fromkeys(rules))
         return unique_rules[:self.max_rules]
     
-    def _extract_rules_from_tree(self, X, y):
+    def _extract_rules_from_tree(self, tree):
         """Extract rules from a decision tree.
 
         Parameters
         ----------
-        X : array-like of shape (n_samples, n_features)
-            Training data.
-        y : array-like of shape (n_samples,)
-            Target values.
+        tree : DecisionTreeClassifier
+            Fitted decision tree.
 
         Returns
         -------
         list
             List of extracted rules.
         """
-        # Initialize decision tree
-        tree = DecisionTreeClassifier(
-            max_depth=self.max_depth,
-            min_samples_leaf=self.min_samples_leaf,
-            random_state=self.random_state
-        )
-        
-        # Fit tree
-        tree.fit(X, y)
-        
-        # Extract rules from tree
         rules = []
         n_nodes = tree.tree_.node_count
         feature = tree.tree_.feature
@@ -189,28 +189,31 @@ class RuleMultiState(BaseMultiStateModel):
         value = tree.tree_.value
         
         def recurse(node, path):
-            if tree.tree_.feature[node] != -2:  # Internal node
+            if feature[node] != -2:  # Internal node
                 name = feature[node]
                 threshold_val = threshold[node]
                 
-                # Left path (<=)
-                left_path = path + [f"X[:, {name}] <= {threshold_val:.3f}"]
+                # Left child
+                left_path = path + [(name, '<=', threshold_val)]
                 recurse(children_left[node], left_path)
                 
-                # Right path (>)
-                right_path = path + [f"X[:, {name}] > {threshold_val:.3f}"]
+                # Right child
+                right_path = path + [(name, '>', threshold_val)]
                 recurse(children_right[node], right_path)
             else:  # Leaf node
-                if len(path) > 0:  # Only add non-empty rules
-                    prob = value[node][0][1] / np.sum(value[node][0])
-                    if prob >= self.min_confidence:
-                        rule = " & ".join(path)
-                        rules.append(rule)
+                # Only add rules for leaves with significant samples
+                if np.sum(value[node]) >= self.min_samples_leaf:
+                    # Convert path to rule string
+                    rule_parts = []
+                    for feat_idx, op, thresh in path:
+                        rule_parts.append(f"X{feat_idx} {op} {thresh:.4f}")
+                    rule = " and ".join(rule_parts)
+                    rules.append(rule)
         
-        recurse(0, [])
+        recurse(0, [])  # Start from root node
         return rules
     
-    def _evaluate_rules(self, X: np.ndarray) -> np.ndarray:
+    def _evaluate_rules(self, X: np.ndarray, rules: Union[List[str], Dict[Tuple[int, int], List[str]]] = None) -> np.ndarray:
         """
         Evaluate rules on input data.
 
@@ -218,17 +221,33 @@ class RuleMultiState(BaseMultiStateModel):
         ----------
         X : array-like
             Input data to evaluate rules on
+        rules : list of str or dict, optional
+            Rules to evaluate. If None, uses self._rules_dict
 
         Returns
         -------
         array-like
             Boolean matrix indicating which rules apply to each sample
         """
-        if len(self.rules_) == 0:
+        if rules is None:
+            rules = self._rules_dict
+            
+        if len(rules) == 0:
             return np.zeros((X.shape[0], 0))
 
-        rule_matrix = np.zeros((X.shape[0], len(self.rules_)))
-        for i, rule in enumerate(self.rules_):
+        # Handle dictionary format
+        if isinstance(rules, dict):
+            # Flatten rules from all transitions
+            all_rules = []
+            for transition_rules in rules.values():
+                all_rules.extend(transition_rules)
+            rules = all_rules
+
+        rule_matrix = np.zeros((X.shape[0], len(rules)))
+        for i, rule in enumerate(rules):
+            if not isinstance(rule, str):
+                continue  # Skip non-string rules
+                
             conditions = rule.split(' and ')
             rule_result = np.ones(X.shape[0], dtype=bool)
             
@@ -254,18 +273,6 @@ class RuleMultiState(BaseMultiStateModel):
                     value = float(condition.split('>')[1].strip())
                     feature_idx = int(''.join(filter(str.isdigit, feature_str)))
                     rule_result &= X[:, feature_idx] > value
-                elif 'in' in condition:
-                    feature_str = condition.split('in')[0].strip()
-                    feature_idx = int(''.join(filter(str.isdigit, feature_str)))
-                    values_str = condition.split('in')[1].strip()[1:-1]  # Remove brackets
-                    values = [float(v.strip()) for v in values_str.split(',')]
-                    rule_result &= np.isin(X[:, feature_idx], values)
-                elif 'not in' in condition:
-                    feature_str = condition.split('not in')[0].strip()
-                    feature_idx = int(''.join(filter(str.isdigit, feature_str)))
-                    values_str = condition.split('not in')[1].strip()[1:-1]  # Remove brackets
-                    values = [float(v.strip()) for v in values_str.split(',')]
-                    rule_result &= ~np.isin(X[:, feature_idx], values)
                 elif '==' in condition:
                     feature_str = condition.split('==')[0].strip()
                     value = float(condition.split('==')[1].strip())
@@ -276,9 +283,9 @@ class RuleMultiState(BaseMultiStateModel):
                     value = float(condition.split('!=')[1].strip())
                     feature_idx = int(''.join(filter(str.isdigit, feature_str)))
                     rule_result &= X[:, feature_idx] != value
-
+                    
             rule_matrix[:, i] = rule_result
-
+            
         return rule_matrix
     
     def fit(self, X, multi_state):
@@ -300,7 +307,7 @@ class RuleMultiState(BaseMultiStateModel):
         # Initialize dictionaries for baseline hazards and rules
         transition_times = {}
         transition_events = {}
-        self.rules_ = {}
+        self._rules_dict = {}
         self.rule_coefficients_ = {}
         self.rule_importances_ = {}
         
@@ -319,11 +326,11 @@ class RuleMultiState(BaseMultiStateModel):
                 transition_times[transition] = times
                 transition_events[transition] = events
                 
-                # Extract rules for current transition
-                rules = self._extract_rules_from_tree(X, events)
+                # Generate rules for current transition
+                rules = self._generate_rules(X, events)
                 
                 # Store rules
-                self.rules_[transition] = rules
+                self._rules_dict[transition] = rules
                 
                 # Initialize elastic net for rule selection
                 elastic_net = ElasticNet(
@@ -333,7 +340,7 @@ class RuleMultiState(BaseMultiStateModel):
                 )
                 
                 # Evaluate rules on the data
-                rule_matrix = self._evaluate_rules(X)
+                rule_matrix = self._evaluate_rules(X, rules)
                 
                 # Fit elastic net to select important rules
                 elastic_net.fit(rule_matrix, events)
@@ -347,6 +354,9 @@ class RuleMultiState(BaseMultiStateModel):
                     # If no rules, use a single constant feature
                     self.rule_coefficients_[transition] = np.array([1.0])
                     self.rule_importances_[transition] = np.array([1.0])
+                    
+                # Store transition models
+                self.transition_models_[transition] = elastic_net
         else:
             # Original implementation for MultiState objects
             for transition in self.state_structure.transitions:
@@ -364,11 +374,11 @@ class RuleMultiState(BaseMultiStateModel):
                 transition_times[transition] = times
                 transition_events[transition] = events
                 
-                # Extract rules for current transition
-                rules = self._extract_rules_from_tree(X[mask], events)
+                # Generate rules for current transition
+                rules = self._generate_rules(X[mask], events)
                 
                 # Store rules
-                self.rules_[transition] = rules
+                self._rules_dict[transition] = rules
                 
                 # Initialize elastic net for rule selection
                 elastic_net = ElasticNet(
@@ -378,7 +388,7 @@ class RuleMultiState(BaseMultiStateModel):
                 )
                 
                 # Evaluate rules on the data
-                rule_matrix = self._evaluate_rules(X[mask])
+                rule_matrix = self._evaluate_rules(X[mask], rules)
                 
                 # Fit elastic net to select important rules
                 elastic_net.fit(rule_matrix, events)
@@ -392,6 +402,9 @@ class RuleMultiState(BaseMultiStateModel):
                     # If no rules, use a single constant feature
                     self.rule_coefficients_[transition] = np.array([1.0])
                     self.rule_importances_[transition] = np.array([1.0])
+                    
+                # Store transition models
+                self.transition_models_[transition] = elastic_net
         
         # Estimate baseline hazards for all transitions
         self._estimate_baseline_hazards(
@@ -444,8 +457,8 @@ class RuleMultiState(BaseMultiStateModel):
         # For each transition leading to the target state
         for transition in transitions_to_target:
             # Evaluate rules for this transition
-            rules = self.rules_[transition]
-            rule_matrix = self._evaluate_rules(X)
+            rules = self._rules_dict[transition]
+            rule_matrix = self._evaluate_rules(X, rules)
             
             # Apply rule coefficients
             transition_risk = rule_matrix @ self.rule_coefficients_[transition]
@@ -512,7 +525,7 @@ class RuleMultiState(BaseMultiStateModel):
             for condition in rule.split(" AND "):
                 feature_idx = int(condition.split("_")[1].split()[0])
                 features.add(feature_idx)
-            feature_importance = np.mean([self.feature_importances_[f] for f in features])
+            feature_importance = np.mean([self.rule_importances_[f] for f in features])
             
             rule_stats.append({
                 'rule': rule,
@@ -566,15 +579,15 @@ class RuleMultiState(BaseMultiStateModel):
         """
         transition = (from_state, to_state)
         
-        if transition not in self.rules_:
+        if transition not in self._rules_dict:
             raise ValueError(f"No model for transition {transition}")
         
         # Get rules and coefficients for this transition
-        rules = self.rules_[transition]
+        rules = self._rules_dict[transition]
         coefficients = self.rule_coefficients_[transition]
         
         # Evaluate rules on input data
-        rule_matrix = self._evaluate_rules(X)
+        rule_matrix = self._evaluate_rules(X, rules)
         
         # Calculate linear predictor
         linear_pred = rule_matrix @ coefficients
@@ -585,4 +598,27 @@ class RuleMultiState(BaseMultiStateModel):
         # Apply exponential function to get hazard
         hazard = np.exp(linear_pred)
         
-        return hazard 
+        return hazard
+
+    def _compute_feature_importances(self):
+        """Compute feature importances"""
+        # Combine importances from all transitions
+        all_importances = []
+        for transition in self.state_structure.transitions:
+            if transition in self.rule_importances_:
+                all_importances.extend(self.rule_importances_[transition])
+        
+        if all_importances:
+            self._feature_importances = np.array(all_importances)
+        else:
+            self._feature_importances = np.array([])
+            
+    def _fit_weights(self, rule_values, y):
+        """Fit weights for the rules"""
+        # This is handled in the fit method using elastic net
+        pass
+        
+    @property
+    def rules_(self):
+        """Get the rules dictionary"""
+        return self._rules_dict 

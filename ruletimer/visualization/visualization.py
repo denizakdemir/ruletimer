@@ -41,7 +41,8 @@ def plot_rule_importance(rules: Union[Dict[Tuple[int, int], List[str]], BaseRule
         rules_dict = rules
         importances_dict = importances
     
-    if not importances_dict:
+    # Check if importances are available and non-empty
+    if not importances_dict or not any(len(imp) > 0 for imp in importances_dict.values()):
         raise ValueError("No importances provided")
     
     # Flatten rules and importances
@@ -109,8 +110,10 @@ def plot_cumulative_incidence(model: BaseRuleEnsemble,
     if times is None:
         times = np.linspace(0, model._y.time.max(), 100)
     
-    # Get predictions
-    cif = model.predict_cumulative_incidence(X, times, event_types)
+    # Get predictions for each event type
+    cif = {}
+    for event_type in event_types:
+        cif[event_type] = model.predict_cumulative_incidence(X, times, event_type=f"Event{event_type}")
     
     # Create plot
     fig = plt.figure(figsize=figsize)
