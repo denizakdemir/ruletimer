@@ -278,8 +278,9 @@ class RuleMultiState(BaseMultiStateModel):
         ----------
         X : array-like of shape (n_samples, n_features)
             Training data.
-        multi_state : MultiState
-            Multi-state data object containing transition information.
+        multi_state : MultiState or dict
+            Multi-state data object or dictionary with transition data
+            in the format {(from_state, to_state): {'times': array, 'events': array}}
 
         Returns
         -------
@@ -293,50 +294,94 @@ class RuleMultiState(BaseMultiStateModel):
         self.rule_coefficients_ = {}
         self.rule_importances_ = {}
         
-        # For each transition in the state structure
-        for transition in self.state_structure.transitions:
-            # Get mask for current transition
-            mask = (multi_state.start_state == transition[0])
-            
-            if not np.any(mask):
-                continue
+        # Handle different input formats
+        if isinstance(multi_state, dict):
+            # Process dictionary format
+            for transition in self.state_structure.transitions:
+                if transition not in multi_state:
+                    continue
+                    
+                # Extract transition data
+                times = multi_state[transition]['times']
+                events = multi_state[transition]['events']
                 
-            # Get times and events for current transition
-            times = multi_state.end_time[mask] - multi_state.start_time[mask]
-            events = (multi_state.end_state[mask] == transition[1]).astype(int)
-            
-            # Store in dictionaries
-            transition_times[transition] = times
-            transition_events[transition] = events
-            
-            # Extract rules for current transition
-            rules = self._extract_rules_from_tree(X[mask], events)
-            
-            # Store rules
-            self.rules_[transition] = rules
-            
-            # Initialize elastic net for rule selection
-            elastic_net = ElasticNet(
-                alpha=self.alpha,
-                l1_ratio=self.l1_ratio,
-                random_state=self.random_state
-            )
-            
-            # Evaluate rules on the data
-            rule_matrix = self._evaluate_rules(X[mask], rules)
-            
-            # Fit elastic net to select important rules
-            elastic_net.fit(rule_matrix, events)
-            
-            # Store rule coefficients and importances
-            if len(rules) > 0:
-                self.rule_coefficients_[transition] = elastic_net.coef_
-                importances = np.abs(elastic_net.coef_)
-                self.rule_importances_[transition] = importances / np.sum(importances) if np.sum(importances) > 0 else importances
-            else:
-                # If no rules, use a single constant feature
-                self.rule_coefficients_[transition] = np.array([1.0])
-                self.rule_importances_[transition] = np.array([1.0])
+                # Store in dictionaries
+                transition_times[transition] = times
+                transition_events[transition] = events
+                
+                # Extract rules for current transition
+                rules = self._extract_rules_from_tree(X, events)
+                
+                # Store rules
+                self.rules_[transition] = rules
+                
+                # Initialize elastic net for rule selection
+                elastic_net = ElasticNet(
+                    alpha=self.alpha,
+                    l1_ratio=self.l1_ratio,
+                    random_state=self.random_state
+                )
+                
+                # Evaluate rules on the data
+                rule_matrix = self._evaluate_rules(X, rules)
+                
+                # Fit elastic net to select important rules
+                elastic_net.fit(rule_matrix, events)
+                
+                # Store rule coefficients and importances
+                if len(rules) > 0:
+                    self.rule_coefficients_[transition] = elastic_net.coef_
+                    importances = np.abs(elastic_net.coef_)
+                    self.rule_importances_[transition] = importances / np.sum(importances) if np.sum(importances) > 0 else importances
+                else:
+                    # If no rules, use a single constant feature
+                    self.rule_coefficients_[transition] = np.array([1.0])
+                    self.rule_importances_[transition] = np.array([1.0])
+        else:
+            # Original implementation for MultiState objects
+            for transition in self.state_structure.transitions:
+                # Get mask for current transition
+                mask = (multi_state.start_state == transition[0])
+                
+                if not np.any(mask):
+                    continue
+                    
+                # Get times and events for current transition
+                times = multi_state.end_time[mask] - multi_state.start_time[mask]
+                events = (multi_state.end_state[mask] == transition[1]).astype(int)
+                
+                # Store in dictionaries
+                transition_times[transition] = times
+                transition_events[transition] = events
+                
+                # Extract rules for current transition
+                rules = self._extract_rules_from_tree(X[mask], events)
+                
+                # Store rules
+                self.rules_[transition] = rules
+                
+                # Initialize elastic net for rule selection
+                elastic_net = ElasticNet(
+                    alpha=self.alpha,
+                    l1_ratio=self.l1_ratio,
+                    random_state=self.random_state
+                )
+                
+                # Evaluate rules on the data
+                rule_matrix = self._evaluate_rules(X[mask], rules)
+                
+                # Fit elastic net to select important rules
+                elastic_net.fit(rule_matrix, events)
+                
+                # Store rule coefficients and importances
+                if len(rules) > 0:
+                    self.rule_coefficients_[transition] = elastic_net.coef_
+                    importances = np.abs(elastic_net.coef_)
+                    self.rule_importances_[transition] = importances / np.sum(importances) if np.sum(importances) > 0 else importances
+                else:
+                    # If no rules, use a single constant feature
+                    self.rule_coefficients_[transition] = np.array([1.0])
+                    self.rule_importances_[transition] = np.array([1.0])
         
         # Estimate baseline hazards for all transitions
         self._estimate_baseline_hazards(
