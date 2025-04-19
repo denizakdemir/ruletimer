@@ -27,6 +27,15 @@ class Survival:
         self.event = np.asarray(event)
         self._validate()
     
+    def __len__(self):
+        """Return the number of samples."""
+        return len(self.time)
+    
+    @property
+    def shape(self):
+        """Return the shape of the data."""
+        return (len(self),)
+    
     def _validate(self):
         """Validate the survival data"""
         if len(self.time) != len(self.event):

@@ -210,65 +210,75 @@ class RuleMultiState(BaseMultiStateModel):
         recurse(0, [])
         return rules
     
-    def _evaluate_rules(self, X: np.ndarray, rules: List[str]) -> np.ndarray:
-        """Evaluate rules on the input data with support for categorical features.
-        
-        This method evaluates rules on the input data with the following enhancements:
-        1. Support for categorical features using 'in' and 'not in' operators
-        2. Handling of missing values
-        3. Efficient rule evaluation using vectorized operations
-        
+    def _evaluate_rules(self, X: np.ndarray) -> np.ndarray:
+        """
+        Evaluate rules on input data.
+
         Parameters
         ----------
-        X : array-like of shape (n_samples, n_features)
+        X : array-like
             Input data to evaluate rules on
-        rules : List[str]
-            List of rules to evaluate
-            
+
         Returns
         -------
-        np.ndarray of shape (n_samples, n_rules)
+        array-like
             Boolean matrix indicating which rules apply to each sample
         """
-        n_samples = X.shape[0]
-        n_rules = len(rules)
-        
-        if n_rules == 0:
-            # If no rules, return a single constant feature
-            return np.ones((n_samples, 1))
-        
-        rule_matrix = np.zeros((n_samples, n_rules), dtype=bool)
-        
-        for i, rule in enumerate(rules):
-            conditions = rule.split(" AND ")
-            mask = np.ones(n_samples, dtype=bool)
+        if len(self.rules_) == 0:
+            return np.zeros((X.shape[0], 0))
+
+        rule_matrix = np.zeros((X.shape[0], len(self.rules_)))
+        for i, rule in enumerate(self.rules_):
+            conditions = rule.split(' and ')
+            rule_result = np.ones(X.shape[0], dtype=bool)
             
             for condition in conditions:
-                parts = condition.split()
-                feature_name = parts[0]
-                feature_idx = int(feature_name.split("_")[1])
-                
-                if "in" in condition or "not in" in condition:
-                    # Handle categorical features
-                    op = parts[1]
-                    categories = eval(" ".join(parts[2:]))  # Convert string to list/set
-                    
-                    if op == "in":
-                        mask &= np.isin(X[:, feature_idx], categories)
-                    else:  # "not in"
-                        mask &= ~np.isin(X[:, feature_idx], categories)
-                else:
-                    # Handle numerical features
-                    op = parts[1]
-                    value = float(parts[2])
-                    
-                    if op == "<=":
-                        mask &= (X[:, feature_idx] <= value)
-                    else:  # op == ">"
-                        mask &= (X[:, feature_idx] > value)
-            
-            rule_matrix[:, i] = mask
-        
+                # Extract feature index and value
+                if '<=' in condition:
+                    feature_str = condition.split('<=')[0].strip()
+                    value = float(condition.split('<=')[1].strip())
+                    feature_idx = int(''.join(filter(str.isdigit, feature_str)))
+                    rule_result &= X[:, feature_idx] <= value
+                elif '>=' in condition:
+                    feature_str = condition.split('>=')[0].strip()
+                    value = float(condition.split('>=')[1].strip())
+                    feature_idx = int(''.join(filter(str.isdigit, feature_str)))
+                    rule_result &= X[:, feature_idx] >= value
+                elif '<' in condition:
+                    feature_str = condition.split('<')[0].strip()
+                    value = float(condition.split('<')[1].strip())
+                    feature_idx = int(''.join(filter(str.isdigit, feature_str)))
+                    rule_result &= X[:, feature_idx] < value
+                elif '>' in condition:
+                    feature_str = condition.split('>')[0].strip()
+                    value = float(condition.split('>')[1].strip())
+                    feature_idx = int(''.join(filter(str.isdigit, feature_str)))
+                    rule_result &= X[:, feature_idx] > value
+                elif 'in' in condition:
+                    feature_str = condition.split('in')[0].strip()
+                    feature_idx = int(''.join(filter(str.isdigit, feature_str)))
+                    values_str = condition.split('in')[1].strip()[1:-1]  # Remove brackets
+                    values = [float(v.strip()) for v in values_str.split(',')]
+                    rule_result &= np.isin(X[:, feature_idx], values)
+                elif 'not in' in condition:
+                    feature_str = condition.split('not in')[0].strip()
+                    feature_idx = int(''.join(filter(str.isdigit, feature_str)))
+                    values_str = condition.split('not in')[1].strip()[1:-1]  # Remove brackets
+                    values = [float(v.strip()) for v in values_str.split(',')]
+                    rule_result &= ~np.isin(X[:, feature_idx], values)
+                elif '==' in condition:
+                    feature_str = condition.split('==')[0].strip()
+                    value = float(condition.split('==')[1].strip())
+                    feature_idx = int(''.join(filter(str.isdigit, feature_str)))
+                    rule_result &= X[:, feature_idx] == value
+                elif '!=' in condition:
+                    feature_str = condition.split('!=')[0].strip()
+                    value = float(condition.split('!=')[1].strip())
+                    feature_idx = int(''.join(filter(str.isdigit, feature_str)))
+                    rule_result &= X[:, feature_idx] != value
+
+            rule_matrix[:, i] = rule_result
+
         return rule_matrix
     
     def fit(self, X, multi_state):
@@ -323,7 +333,7 @@ class RuleMultiState(BaseMultiStateModel):
                 )
                 
                 # Evaluate rules on the data
-                rule_matrix = self._evaluate_rules(X, rules)
+                rule_matrix = self._evaluate_rules(X)
                 
                 # Fit elastic net to select important rules
                 elastic_net.fit(rule_matrix, events)
@@ -368,7 +378,7 @@ class RuleMultiState(BaseMultiStateModel):
                 )
                 
                 # Evaluate rules on the data
-                rule_matrix = self._evaluate_rules(X[mask], rules)
+                rule_matrix = self._evaluate_rules(X[mask])
                 
                 # Fit elastic net to select important rules
                 elastic_net.fit(rule_matrix, events)
@@ -435,7 +445,7 @@ class RuleMultiState(BaseMultiStateModel):
         for transition in transitions_to_target:
             # Evaluate rules for this transition
             rules = self.rules_[transition]
-            rule_matrix = self._evaluate_rules(X, rules)
+            rule_matrix = self._evaluate_rules(X)
             
             # Apply rule coefficients
             transition_risk = rule_matrix @ self.rule_coefficients_[transition]
@@ -472,7 +482,7 @@ class RuleMultiState(BaseMultiStateModel):
             return rules
             
         # Evaluate all rules
-        rule_matrix = self._evaluate_rules(X, rules)
+        rule_matrix = self._evaluate_rules(X)
         
         # Calculate rule statistics
         rule_stats = []
@@ -525,13 +535,13 @@ class RuleMultiState(BaseMultiStateModel):
         covered_samples = np.zeros(X.shape[0], dtype=bool)
         
         for stat in rule_stats:
-            rule_mask = self._evaluate_rules(X, [stat['rule']])[:, 0]
-            new_coverage = np.sum(~covered_samples & rule_mask)
+            rule_mask = self._evaluate_rules(X)
+            new_coverage = np.sum(~covered_samples & rule_mask[:, i])
             
             # Keep rule if it adds significant new coverage
             if new_coverage / X.shape[0] >= self.min_support:
                 pruned_rules.append(stat['rule'])
-                covered_samples |= rule_mask
+                covered_samples |= rule_mask[:, i]
         
         return pruned_rules
     
@@ -564,7 +574,7 @@ class RuleMultiState(BaseMultiStateModel):
         coefficients = self.rule_coefficients_[transition]
         
         # Evaluate rules on input data
-        rule_matrix = self._evaluate_rules(X, rules)
+        rule_matrix = self._evaluate_rules(X)
         
         # Calculate linear predictor
         linear_pred = rule_matrix @ coefficients

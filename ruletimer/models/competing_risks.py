@@ -289,19 +289,30 @@ class RuleCompetingRisks(BaseMultiStateModel):
             if event_type not in self.event_types:
                 raise ValueError(f"Unknown event type: {event_type}")
             state = self.event_type_to_state[event_type]
-            return self.predict_transition_probability(X, times, 0, state)
+            cif = self.predict_transition_probability(X, times, 0, state)
+            # Ensure monotonicity
+            return np.maximum.accumulate(cif, axis=1)
         
-        # Handle time-dependent covariates
-        if self.support_time_dependent and X.ndim == 3:
-            # For time-dependent covariates, we'll use the values at each time point
-            # This is a simple approach - more sophisticated methods could be implemented
-            X = X[:, :, 0]  # Use features at first time point for now
-            # TODO: Implement proper handling of time-dependent covariates
+        # Get CIFs for all event types
+        cifs = {}
+        for evt_type in self.event_types:
+            state = self.event_type_to_state[evt_type]
+            cif = self.predict_transition_probability(X, times, 0, state)
+            # Ensure monotonicity for each event type
+            cifs[evt_type] = np.maximum.accumulate(cif, axis=1)
         
-        return {
-            event_type: self.predict_cumulative_incidence(X, times, event_type)
-            for event_type in self.event_types
-        }
+        # Normalize CIFs to ensure they sum to at most 1
+        cif_sum = np.zeros((len(X), len(times)))
+        for evt_type in self.event_types:
+            cif_sum += cifs[evt_type]
+        
+        # Only normalize where sum exceeds 1
+        mask = cif_sum > 1
+        if np.any(mask):
+            for evt_type in self.event_types:
+                cifs[evt_type][mask] = cifs[evt_type][mask] / cif_sum[mask]
+        
+        return cifs
     
     def predict_cause_specific_hazard(
         self,

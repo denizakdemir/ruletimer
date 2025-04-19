@@ -122,8 +122,14 @@ class RuleSurvival(BaseMultiStateModel):
         if times is None:
             times = self.baseline_hazards_[(0, 1)][0]
             
-        # Survival probability is 1 - transition probability
-        return 1 - self.predict_transition_probability(X, times, 0, 1)
+        # Get survival probabilities
+        survival_probs = 1 - self.predict_transition_probability(X, times, 0, 1)
+        
+        # Ensure survival probability at time 0 is 1
+        if len(times) > 0:
+            survival_probs[:, 0] = 1.0
+        
+        return survival_probs
     
     def predict_hazard(
         self,
@@ -202,33 +208,49 @@ class RuleSurvival(BaseMultiStateModel):
             Transition to fit model for
         """
         from sklearn.ensemble import RandomForestRegressor
+        from sklearn.feature_selection import SelectFromModel
         
-        # Initialize random forest
+        # Initialize random forest with improved parameters
         forest = RandomForestRegressor(
             n_estimators=self.n_estimators,
             max_depth=self.max_depth,
+            min_samples_leaf=self.min_samples_leaf,
+            max_features='sqrt',  # Use sqrt of features for better generalization
+            bootstrap=True,  # Enable bootstrapping
             random_state=self.random_state
         )
         
-        # Fit forest on survival times
-        forest.fit(X, y.time)
+        # Get event indicator for this transition
+        is_event = y.event == 1
+        
+        # Fit forest on survival times with event indicator as sample weight
+        forest.fit(X, y.time, sample_weight=is_event.astype(float))
+        
+        # Select important features
+        selector = SelectFromModel(forest, prefit=True, threshold='median')
+        important_features = selector.get_support()
+        X_important = X[:, important_features]
+        
+        # Fit forest again on important features
+        forest.fit(X_important, y.time, sample_weight=is_event.astype(float))
         
         # Extract rules from forest
         self.rules_ = self._extract_rules_from_forest(forest)
         
         # Evaluate rules on data
-        rule_matrix = self._evaluate_rules(X)
+        rule_matrix = self._evaluate_rules(X_important)
         
-        # Fit elastic net on rule matrix
+        # Fit elastic net with increased max_iter for better convergence
         model = ElasticNet(
             alpha=self.alpha,
             l1_ratio=self.l1_ratio,
+            max_iter=10000,  # Increase max iterations
+            tol=1e-5,  # Tighter convergence tolerance
             random_state=self.random_state
         )
-        model.fit(rule_matrix, y.time)
+        model.fit(rule_matrix, y.time, sample_weight=is_event.astype(float))
         
-        # Store rule weights and model
-        self.rule_weights_ = model.coef_
+        # Store rules and weights for this transition
         self.transition_models_[transition] = model
         
         # Compute feature importances
@@ -239,8 +261,19 @@ class RuleSurvival(BaseMultiStateModel):
         rules = []
         for tree in forest.estimators_:
             rules.extend(self._extract_rules_from_tree(tree.tree_))
-        return rules[:self.max_rules]
-    
+            
+        # Sort rules by importance
+        rule_importances = []
+        for rule in rules:
+            importance = 0
+            for feature, _, _ in rule:
+                importance += forest.feature_importances_[feature]
+            rule_importances.append(importance)
+            
+        # Sort rules by importance and take top max_rules
+        sorted_rules = [rule for _, rule in sorted(zip(rule_importances, rules), reverse=True)]
+        return sorted_rules[:self.max_rules]
+        
     def _extract_rules_from_tree(self, tree):
         """Extract rules from a single tree."""
         rules = []
@@ -258,7 +291,9 @@ class RuleSurvival(BaseMultiStateModel):
                 right_rule = rule + [(feature, ">", threshold)]
                 recurse(tree.children_right[node], right_rule)
             else:
-                rules.append(rule)
+                # Only keep rules from nodes with sufficient samples
+                if tree.n_node_samples[node] >= self.min_samples_leaf:
+                    rules.append(rule)
         
         recurse(0, [])
         return rules
@@ -292,6 +327,29 @@ class RuleSurvival(BaseMultiStateModel):
             
         return importances 
 
+    def predict_risk(self, X: np.ndarray) -> np.ndarray:
+        """
+        Predict risk scores for samples.
+        
+        Parameters
+        ----------
+        X : array-like
+            Data to predict for
+            
+        Returns
+        -------
+        np.ndarray
+            Risk scores for each sample. Higher values indicate higher risk.
+        """
+        # Evaluate rules on input data
+        rule_matrix = self._evaluate_rules(X)
+        
+        # Get relative hazard from elastic net model
+        relative_hazard = self.transition_models_[(0, 1)].predict(rule_matrix)
+        
+        # Higher relative hazard means higher risk
+        return relative_hazard  # No need for exponential or negation
+
 class RuleSurvivalCox(RuleSurvival):
     """
     Rule-based Cox model for survival analysis.
@@ -299,12 +357,12 @@ class RuleSurvivalCox(RuleSurvival):
     
     def __init__(
         self,
-        max_rules: int = 32,
-        max_depth: int = 4,
-        n_estimators: int = 200,
-        alpha: float = 0.01,
+        max_rules: int = 100,
+        max_depth: int = 3,
+        n_estimators: int = 500,
+        min_samples_leaf: int = 10,
+        alpha: float = 0.1,
         l1_ratio: float = 0.5,
-        hazard_method: str = "nelson-aalen",
         random_state: Optional[int] = None
     ):
         """
@@ -318,22 +376,25 @@ class RuleSurvivalCox(RuleSurvival):
             Maximum depth of trees
         n_estimators : int
             Number of trees in random forest
+        min_samples_leaf : int
+            Minimum number of samples required at a leaf node
         alpha : float
             L1 + L2 regularization strength
         l1_ratio : float
             L1 ratio for elastic net (1 = lasso, 0 = ridge)
-        hazard_method : str
-            Method for hazard estimation
         random_state : int, optional
             Random state for reproducibility
         """
-        super().__init__(hazard_method=hazard_method)
+        super().__init__(hazard_method="nelson-aalen")
         self.max_rules = max_rules
         self.max_depth = max_depth
         self.n_estimators = n_estimators
+        self.min_samples_leaf = min_samples_leaf
         self.alpha = alpha
         self.l1_ratio = l1_ratio
         self.random_state = random_state
+        self.transition_models_ = {}
+        self.rules_ = []
         
     def predict_transition_hazard(
         self,
@@ -419,33 +480,49 @@ class RuleSurvivalCox(RuleSurvival):
             Transition to fit model for
         """
         from sklearn.ensemble import RandomForestRegressor
+        from sklearn.feature_selection import SelectFromModel
         
-        # Initialize random forest
+        # Initialize random forest with improved parameters
         forest = RandomForestRegressor(
             n_estimators=self.n_estimators,
             max_depth=self.max_depth,
+            min_samples_leaf=self.min_samples_leaf,
+            max_features='sqrt',  # Use sqrt of features for better generalization
+            bootstrap=True,  # Enable bootstrapping
             random_state=self.random_state
         )
         
-        # Fit forest on survival times
-        forest.fit(X, y.time)
+        # Get event indicator for this transition
+        is_event = y.event == 1
+        
+        # Fit forest on survival times with event indicator as sample weight
+        forest.fit(X, y.time, sample_weight=is_event.astype(float))
+        
+        # Select important features
+        selector = SelectFromModel(forest, prefit=True, threshold='median')
+        important_features = selector.get_support()
+        X_important = X[:, important_features]
+        
+        # Fit forest again on important features
+        forest.fit(X_important, y.time, sample_weight=is_event.astype(float))
         
         # Extract rules from forest
         self.rules_ = self._extract_rules_from_forest(forest)
         
         # Evaluate rules on data
-        rule_matrix = self._evaluate_rules(X)
+        rule_matrix = self._evaluate_rules(X_important)
         
-        # Fit elastic net on rule matrix
+        # Fit elastic net with increased max_iter for better convergence
         model = ElasticNet(
             alpha=self.alpha,
             l1_ratio=self.l1_ratio,
+            max_iter=10000,  # Increase max iterations
+            tol=1e-5,  # Tighter convergence tolerance
             random_state=self.random_state
         )
-        model.fit(rule_matrix, y.time)
+        model.fit(rule_matrix, y.time, sample_weight=is_event.astype(float))
         
-        # Store rule weights and model
-        self.rule_weights_ = model.coef_
+        # Store rules and weights for this transition
         self.transition_models_[transition] = model
         
         # Compute feature importances
@@ -456,7 +533,18 @@ class RuleSurvivalCox(RuleSurvival):
         rules = []
         for tree in forest.estimators_:
             rules.extend(self._extract_rules_from_tree(tree.tree_))
-        return rules[:self.max_rules]
+            
+        # Sort rules by importance
+        rule_importances = []
+        for rule in rules:
+            importance = 0
+            for feature, _, _ in rule:
+                importance += forest.feature_importances_[feature]
+            rule_importances.append(importance)
+            
+        # Sort rules by importance and take top max_rules
+        sorted_rules = [rule for _, rule in sorted(zip(rule_importances, rules), reverse=True)]
+        return sorted_rules[:self.max_rules]
         
     def _extract_rules_from_tree(self, tree):
         """Extract rules from a single tree."""
@@ -475,7 +563,9 @@ class RuleSurvivalCox(RuleSurvival):
                 right_rule = rule + [(feature, ">", threshold)]
                 recurse(tree.children_right[node], right_rule)
             else:
-                rules.append(rule)
+                # Only keep rules from nodes with sufficient samples
+                if tree.n_node_samples[node] >= self.min_samples_leaf:
+                    rules.append(rule)
         
         recurse(0, [])
         return rules
@@ -508,3 +598,26 @@ class RuleSurvivalCox(RuleSurvival):
             importances /= np.sum(importances)
             
         return importances 
+
+    def predict_risk(self, X: np.ndarray) -> np.ndarray:
+        """
+        Predict risk scores for samples.
+        
+        Parameters
+        ----------
+        X : array-like
+            Data to predict for
+            
+        Returns
+        -------
+        np.ndarray
+            Risk scores for each sample. Higher values indicate higher risk.
+        """
+        # Evaluate rules on input data
+        rule_matrix = self._evaluate_rules(X)
+        
+        # Get relative hazard from elastic net model
+        relative_hazard = self.transition_models_[(0, 1)].predict(rule_matrix)
+        
+        # Higher relative hazard means higher risk
+        return relative_hazard  # No need for exponential or negation 
