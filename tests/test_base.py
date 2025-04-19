@@ -70,7 +70,7 @@ def test_base_rule_ensemble_initialization():
     assert model.alpha == 0.1
     assert model.l1_ratio == 0.7
     assert model.random_state == 42
-    assert model.rules_ is None
+    assert model.rules_ == []
     assert model.rule_weights_ is None
     assert model.feature_importances_ is None
 
@@ -290,7 +290,7 @@ def test_evaluate_rules():
     model = SimpleRuleEnsemble(max_rules=3)
     model._X = X
     model._y = y
-    model.rules_ = [
+    model._rules_tuples = [
         [(0, "<=", 0.5)],  # Simple rule
         [(1, ">", 0.0), (2, "<=", 1.0)],  # Compound rule
         [(3, ">", -1.0), (4, ">", 0.0), (0, "<=", 1.0)]  # Complex rule

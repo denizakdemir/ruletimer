@@ -15,6 +15,29 @@ from .base import BaseRuleEnsemble
 
 class RuleSurvival(BaseRuleEnsemble):
     """Rule ensemble model for standard survival analysis"""
+
+    @staticmethod
+    def to_rule_string(rule, feature_names=None):
+        """Convert a rule (list of (feat, op, thresh)) to a human-readable string."""
+        if feature_names is None:
+            def fname(idx): return f"feature_{idx}"
+        else:
+            def fname(idx): return str(feature_names[idx])
+        conds = [f"{fname(feat)} {op} {thresh:.3f}" for feat, op, thresh in rule]
+        return "if " + " and ".join(conds) + " then activate"
+
+    def rule_importance(self):
+        """Return rule importances (absolute value of rule weights)."""
+        return np.abs(self.rule_weights_) if hasattr(self, 'rule_weights_') else None
+
+    @property
+    def rules_(self):
+        # Return string representation for all rules
+        feature_names = None
+        if hasattr(self, '_X'):
+            if isinstance(self._X, pd.DataFrame):
+                feature_names = self._X.columns
+        return [self.to_rule_string(rule, feature_names) for rule in self._rules_tuples]
     
     def __init__(self, max_rules: int = 100,
                  alpha: float = 0.05,
@@ -29,7 +52,10 @@ class RuleSurvival(BaseRuleEnsemble):
                  prune_threshold: float = 0.01,
                  support_time_dependent: bool = True,
                  tree_growing_strategy: str = 'single',
-                 interaction_depth: int = 2):
+                 interaction_depth: int = 2,
+                 regularization: str = 'elasticnet',
+                 pruning_method: str = 'importance',
+                 detect_interactions: bool = False):
         """
         Initialize rule ensemble survival model
         
@@ -63,6 +89,12 @@ class RuleSurvival(BaseRuleEnsemble):
             Strategy for growing trees ('single', 'forest', 'interaction')
         interaction_depth : int, default=2
             Maximum depth for interaction terms when using 'interaction' strategy
+        regularization : str, default='elasticnet'
+            Type of regularization to use ('l1', 'l2', 'elasticnet')
+        pruning_method : str, default='importance'
+            Method to use for rule pruning ('importance', 'redundancy', 'complexity')
+        detect_interactions : bool, default=False
+            Whether to detect feature interactions
         """
         super().__init__(max_rules=max_rules, alpha=alpha,
                         l1_ratio=l1_ratio, random_state=random_state,
@@ -76,6 +108,9 @@ class RuleSurvival(BaseRuleEnsemble):
         self.model_type = model_type
         self.tree_growing_strategy = tree_growing_strategy
         self.interaction_depth = interaction_depth
+        self.regularization = regularization
+        self.pruning_method = pruning_method
+        self.detect_interactions = detect_interactions
         self.baseline_hazard_ = None
         self.baseline_survival_ = None
         self.parametric_params_ = None
@@ -91,6 +126,7 @@ class RuleSurvival(BaseRuleEnsemble):
         # Initialize rules list
         rules = []
         rule_features = []
+        self._rules_tuples = []  # Store rule tuples for string conversion
         
         # For each feature
         for feature_idx in range(X.shape[1]):
@@ -391,8 +427,8 @@ class RuleSurvival(BaseRuleEnsemble):
         if isinstance(X, pd.DataFrame):
             X = X.values
         
-        rule_values = np.zeros((X.shape[0], len(self.rules_)))
-        for i, rule in enumerate(self.rules_):
+        rule_values = np.zeros((X.shape[0], len(self._rules_tuples)))
+        for i, rule in enumerate(self._rules_tuples):
             # Start with all True
             mask = np.ones(X.shape[0], dtype=bool)
             
@@ -607,20 +643,27 @@ class RuleSurvival(BaseRuleEnsemble):
         survival = np.zeros((X.shape[0], len(times)))
         
         if self.model_type == 'cox':
+            # For Cox model, S(t) = exp(-H0(t) * exp(X*beta))
+            # where H0(t) is the cumulative baseline hazard
             for i, t in enumerate(times):
-                hazard_at_t = np.interp(t, self.baseline_hazard_[0],
+                cumhaz_at_t = np.interp(t, self.baseline_hazard_[0],
                                       self.baseline_hazard_[1],
-                                      left=0, right=0)
-                survival[:, i] = np.exp(-hazard_at_t * risk_scores)
+                                      left=0, right=self.baseline_hazard_[1][-1])
+                survival[:, i] = np.exp(-cumhaz_at_t * risk_scores)
         elif self.model_type == 'weibull':
+            # For Weibull model, S(t) = exp(-(t/scale)^shape * exp(X*beta))
             scale = self.parametric_params_['scale']
             shape = self.parametric_params_['shape']
-            for i, t in enumerate(times):
-                survival[:, i] = np.exp(-((t/scale) ** shape) * risk_scores)
+            
+            # Avoid division by zero at t=0
+            t_adj = np.maximum(times, 0)
+            survival_matrix = np.exp(-(t_adj/scale)**shape)
+            survival = survival_matrix[np.newaxis, :] ** risk_scores[:, np.newaxis]
         else:  # exponential
+            # For exponential model, S(t) = exp(-t/(scale) * exp(X*beta))
             scale = self.parametric_params_['scale']
-            for i, t in enumerate(times):
-                survival[:, i] = np.exp(-(t/scale) * risk_scores)
+            survival_matrix = np.exp(-times/scale)
+            survival = survival_matrix[np.newaxis, :] ** risk_scores[:, np.newaxis]
         
         return survival
     
@@ -652,19 +695,27 @@ class RuleSurvival(BaseRuleEnsemble):
         hazard = np.zeros((X.shape[0], len(times)))
         
         if self.model_type == 'cox':
+            # For Cox model, h(t) = h0(t) * exp(X*beta)
+            # where h0(t) is the baseline hazard
             for i, t in enumerate(times):
-                hazard[:, i] = np.interp(t, self.baseline_hazard_[0],
-                                       self.baseline_hazard_[1],
-                                       left=0, right=0) * risk_scores
+                # Use linear interpolation for baseline hazard
+                hazard_at_t = np.interp(t, self.baseline_hazard_[0],
+                                      self.baseline_hazard_[1],
+                                      left=0, right=self.baseline_hazard_[1][-1])
+                hazard[:, i] = hazard_at_t * risk_scores
         elif self.model_type == 'weibull':
+            # For Weibull model, h(t) = (shape/scale) * (t/scale)^(shape-1) * exp(X*beta)
             scale = self.parametric_params_['scale']
             shape = self.parametric_params_['shape']
-            for i, t in enumerate(times):
-                hazard[:, i] = (shape/scale) * ((t/scale) ** (shape-1)) * risk_scores
+            
+            # Avoid division by zero at t=0
+            t_adj = np.maximum(times, np.finfo(float).tiny)
+            hazard_matrix = (shape/scale) * ((t_adj/scale) ** (shape-1))
+            hazard = risk_scores[:, np.newaxis] * hazard_matrix[np.newaxis, :]
         else:  # exponential
+            # For exponential model, h(t) = (1/scale) * exp(X*beta)
             scale = self.parametric_params_['scale']
-            for i, t in enumerate(times):
-                hazard[:, i] = (1/scale) * risk_scores
+            hazard = (1/scale) * risk_scores[:, np.newaxis] * np.ones_like(times)[np.newaxis, :]
         
         return hazard
     

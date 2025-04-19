@@ -66,7 +66,15 @@ class BaseRuleEnsemble(BaseEstimator):
         self.prune_threshold = prune_threshold
         self.support_time_dependent = support_time_dependent
         
-        self.rules_ = None
+        self._rules_tuples = []
+
+    @property
+    def rules_(self):
+        if self._rules_tuples is None or len(self._rules_tuples) == 0:
+            return []
+        # Generic string representation for base class
+        return [str(rule) for rule in self._rules_tuples]
+
         self.rule_weights_ = None
         self._feature_importances_ = None
         self.time_dependent_features_ = None
@@ -229,8 +237,8 @@ class BaseRuleEnsemble(BaseEstimator):
         if isinstance(X_processed, pd.DataFrame):
             X_processed = X_processed.values
         
-        rule_values = np.zeros((X_processed.shape[0], len(self.rules_)))
-        for i, conditions in enumerate(self.rules_):
+        rule_values = np.zeros((X_processed.shape[0], len(self._rules_tuples)))
+        for i, conditions in enumerate(self._rules_tuples):
             mask = np.ones(X_processed.shape[0], dtype=bool)
             for feature, op, threshold in conditions:
                 if op == "<=":
@@ -270,6 +278,11 @@ class BaseRuleEnsemble(BaseEstimator):
         """
         raise NotImplementedError("This method must be implemented by subclasses")
     
+    def _get_rule_activation(self, X):
+        # Returns a binary matrix of shape (n_samples, n_rules)
+        rule_values = self._evaluate_rules(X)
+        return (rule_values > 0).astype(int)
+
     def fit(self, X: Union[np.ndarray, pd.DataFrame], y: np.ndarray) -> 'BaseRuleEnsemble':
         """
         Fit the rule ensemble model
@@ -296,7 +309,7 @@ class BaseRuleEnsemble(BaseEstimator):
         self._X = X
         
         # Extract rules
-        self.rules_ = self._extract_rules(X)
+        self._rules_tuples = self._extract_rules(X)
         
         # Evaluate rules
         rule_values = self._evaluate_rules(X)

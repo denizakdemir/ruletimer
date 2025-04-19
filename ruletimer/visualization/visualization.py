@@ -242,6 +242,8 @@ def plot_state_occupation(times: np.ndarray,
     
     # Sort states for consistent colors
     states = sorted(state_probs.keys())
+    if len(states) < 2:
+        raise ValueError("At least two states are required to plot state occupation probabilities.")
     
     # Plot each state
     for state_num in states:

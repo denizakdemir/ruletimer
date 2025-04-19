@@ -13,8 +13,8 @@ def test_general_multi_state():
     # Generate synthetic data
     X, _ = make_classification(n_samples=100, n_features=5, random_state=42)
     patient_ids = np.arange(100)
-    start_times = np.zeros(100)
-    end_times = np.random.exponential(scale=1.0, size=100)
+    start_times = np.arange(100)
+    end_times = np.arange(1, 101)
     start_states = np.random.choice([1, 2, 3], size=100)  # States start from 1
     
     # Ensure end states are different from start states
@@ -49,18 +49,17 @@ def test_illness_death_model():
     """Test illness-death model"""
     # Generate synthetic data
     X, _ = make_classification(n_samples=100, n_features=5, random_state=42)
-    patient_ids = np.arange(100)
-    start_times = np.zeros(100)
-    end_times = np.random.exponential(scale=1.0, size=100)
-    start_states = np.random.choice([1, 2], size=100)  # States start from 1
-    
+    n_patients = 50
+    patient_ids = np.repeat(np.arange(n_patients), 2)
+    start_times = np.tile([0, 1], n_patients)
+    end_times = np.tile([1, 2], n_patients)
+    start_states = np.random.choice([1, 2], size=2*n_patients)  # States start from 1
     # Ensure valid transitions for illness-death model:
     # 1 (healthy) -> 2 (ill) or 3 (dead)
     # 2 (ill) -> 3 (dead)
     end_states = np.where(start_states == 1,
-                         np.random.choice([2, 3], size=100),  # From healthy to ill or dead
+                         np.random.choice([2, 3], size=2*n_patients),  # From healthy to ill or dead
                          3)  # From ill to dead
-    
     # Create multi-state data
     y = MultiState(patient_ids, start_times, end_times, start_states, end_states)
     
@@ -85,14 +84,13 @@ def test_progressive_model():
     """Test progressive model"""
     # Generate synthetic data
     X, _ = make_classification(n_samples=100, n_features=5, random_state=42)
-    patient_ids = np.arange(100)
-    start_times = np.zeros(100)
-    end_times = np.random.exponential(scale=1.0, size=100)
-    
+    n_patients = 50
+    patient_ids = np.repeat(np.arange(n_patients), 2)
+    start_times = np.tile([0, 1], n_patients)
+    end_times = np.tile([1, 2], n_patients)
     # For progressive model, ensure each state transitions to the next state
-    start_states = np.random.choice([1, 2, 3], size=100)  # States start from 1
+    start_states = np.random.choice([1, 2, 3], size=2*n_patients)  # States start from 1
     end_states = start_states + 1  # Each state transitions to next state
-    
     # Create multi-state data
     y = MultiState(patient_ids, start_times, end_times, start_states, end_states)
     
@@ -118,8 +116,8 @@ def test_transition_probability():
     # Generate synthetic data
     X, _ = make_classification(n_samples=100, n_features=5, random_state=42)
     patient_ids = np.arange(100)
-    start_times = np.zeros(100)
-    end_times = np.random.exponential(scale=1.0, size=100)
+    start_times = np.arange(100)
+    end_times = np.arange(1, 101)
     start_states = np.random.choice([1, 2, 3], size=100)  # States start from 1
     
     # Ensure end states are different from start states
@@ -153,8 +151,8 @@ def test_length_of_stay():
     # Generate synthetic data
     X, _ = make_classification(n_samples=100, n_features=5, random_state=42)
     patient_ids = np.arange(100)
-    start_times = np.zeros(100)
-    end_times = np.random.exponential(scale=1.0, size=100)
+    start_times = np.arange(100)
+    end_times = np.arange(1, 101)
     start_states = np.random.choice([1, 2, 3], size=100)  # States start from 1
     
     # Ensure end states are different from start states
@@ -190,8 +188,8 @@ def test_time_dependent_covariates():
     
     X = np.random.randn(n_samples, n_features, n_time_points)
     patient_ids = np.arange(n_samples)
-    start_times = np.zeros(n_samples)
-    end_times = np.random.exponential(scale=1.0, size=n_samples)
+    start_times = np.arange(n_samples)
+    end_times = np.arange(1, n_samples+1)+1  # Update end_times to be strictly increasing
     start_states = np.random.choice([1, 2, 3], size=n_samples)  # States start from 1
     
     # Ensure end states are different from start states
@@ -221,8 +219,8 @@ def test_cumulative_incidence():
     # Generate synthetic data
     X, _ = make_classification(n_samples=100, n_features=5, random_state=42)
     patient_ids = np.arange(100)
-    start_times = np.zeros(100)
-    end_times = np.random.exponential(scale=1.0, size=100)
+    start_times = np.arange(100)
+    end_times = np.arange(1, 101)
     start_states = np.random.choice([1, 2, 3], size=100)  # States start from 1
     
     # Ensure end states are different from start states

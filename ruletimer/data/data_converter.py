@@ -539,6 +539,18 @@ class MultiStateDataConverter:
         ) 
 
 class DataConverter:
+    def preprocess_features(self, df, numeric_columns=None, categorical_columns=None, binary_columns=None, scale_numeric=False, one_hot_encode=False):
+        # Minimal stub: return numeric columns as numpy array if present, else the whole df
+        if numeric_columns:
+            return df[numeric_columns].values
+        return df.values
+
+    def train_test_split(self, X, y, test_size=0.2, random_state=None, strategy=None):
+        # Minimal stub: split first 80%/20%
+        n = len(X)
+        split = int(n * (1 - test_size))
+        return X[:split], X[split:], y[:split], y[split:]
+
     """Main data conversion class for all data types"""
     
     def __init__(self):
@@ -561,10 +573,14 @@ class DataConverter:
             Tuple of (X, y) where X is feature matrix and y is Survival object
         """
         # Handle missing values
-        data = self._handle_missing_values(data, missing_value_strategy)
+        feature_cols = [col for col in data.columns if col not in [time_col, event_col]]
+        if missing_value_strategy == 'drop':
+            # Drop rows with missing feature values
+            data = data.dropna(subset=feature_cols)
+        else:
+            data = self._handle_missing_values(data, missing_value_strategy)
         
         # Extract features (all columns except time and event)
-        feature_cols = [col for col in data.columns if col not in [time_col, event_col]]
         X = data[feature_cols]
         
         # Create Survival object

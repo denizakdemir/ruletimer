@@ -7,6 +7,8 @@ import pandas as pd
 from typing import Union, List, Tuple, Optional
 
 class Survival:
+    def __getitem__(self, idx):
+        return Survival(self.time[idx], self.event[idx])
     """Class for standard survival data"""
     
     def __init__(self, time: Union[np.ndarray, pd.Series], 
@@ -35,6 +37,8 @@ class Survival:
             raise ValueError("Event indicators must be 0 or 1")
 
 class CompetingRisks:
+    def __getitem__(self, idx):
+        return CompetingRisks(self.time[idx], self.event[idx])
     """Class for competing risks data"""
     
     def __init__(self, time: Union[np.ndarray, pd.Series], 
@@ -65,39 +69,41 @@ class CompetingRisks:
             raise ValueError("Event indicators must be 0, 1, or 2")
 
 class MultiState:
+    def __getitem__(self, idx):
+        return MultiState(self.start_time[idx], self.end_time[idx], self.start_state[idx], self.end_state[idx], self.patient_id[idx])
     """Class for multi-state data"""
     
-    def __init__(self, patient_id: Union[np.ndarray, pd.Series],
-                 start_time: Union[np.ndarray, pd.Series],
+    def __init__(self, start_time: Union[np.ndarray, pd.Series],
                  end_time: Union[np.ndarray, pd.Series],
                  start_state: Union[np.ndarray, pd.Series],
-                 end_state: Union[np.ndarray, pd.Series]):
+                 end_state: Union[np.ndarray, pd.Series],
+                 patient_id: Optional[Union[np.ndarray, pd.Series]] = None):
         """
         Initialize multi-state data
         
         Parameters
         ----------
-        patient_id : array-like
-            Unique identifier for each patient
         start_time : array-like
             Time at which the observation starts
         end_time : array-like
             Time at which the observation ends
         start_state : array-like
-            State at the start of observation (positive integers for states, 0 for censoring)
+            State at the start of observation (non-negative integers)
         end_state : array-like
-            State at the end of observation (positive integers for states, 0 for censoring)
-        
-        Notes
-        -----
-        State 0 is reserved for censoring. All other states should be positive integers (1, 2, ..., k).
-        When a transition ends in state 0, it indicates that the observation was censored at that point.
+            State at the end of observation (non-negative integers)
+        patient_id : array-like, optional
+            Unique identifier for each patient. If not provided, will be generated automatically.
         """
-        self.patient_id = np.asarray(patient_id)
         self.start_time = np.asarray(start_time)
         self.end_time = np.asarray(end_time)
         self.start_state = np.asarray(start_state)
         self.end_state = np.asarray(end_state)
+        
+        if patient_id is None:
+            self.patient_id = np.arange(len(start_time))
+        else:
+            self.patient_id = np.asarray(patient_id)
+            
         self._validate()
     
     def _validate(self):
@@ -113,8 +119,8 @@ class MultiState:
         # Validate times
         if not np.all(self.start_time >= 0):
             raise ValueError("All start times must be non-negative")
-        if not np.all(self.end_time >= self.start_time):
-            raise ValueError("End times must be greater than or equal to start times")
+        if not np.all(self.end_time >= 0):
+            raise ValueError("All end times must be non-negative")
             
         # Validate states
         if not np.all(self.start_state >= 0):
@@ -122,21 +128,14 @@ class MultiState:
         if not np.all(self.end_state >= 0):
             raise ValueError("States must be non-negative integers")
         
-        # Validate state transitions
-        non_censored_mask = self.end_state != 0
-        if not np.all(self.start_state[non_censored_mask] > 0):
-            raise ValueError("Start states must be positive integers (1, 2, ..., k) when not censored")
-        if not np.all(self.end_state[non_censored_mask] > 0):
-            raise ValueError("End states must be positive integers (1, 2, ..., k) when not censored")
-            
-        # Validate that start and end states are different when not censored
-        if np.any((self.start_state[non_censored_mask] == self.end_state[non_censored_mask])):
-            raise ValueError("Start and end states must be different when not censored")
-            
         # Validate time ordering within patients
         for pid in np.unique(self.patient_id):
             mask = self.patient_id == pid
-            if not np.all(np.diff(self.start_time[mask]) >= 0):
-                raise ValueError(f"Start times must be non-decreasing for patient {pid}")
-            if not np.all(np.diff(self.end_time[mask]) >= 0):
-                raise ValueError(f"End times must be non-decreasing for patient {pid}") 
+            if len(self.start_time[mask]) > 1:  # Only check if more than one observation
+                if not np.all(np.diff(self.start_time[mask]) > 0):
+                    raise ValueError(f"Start times must be strictly increasing for patient {pid}")
+                if not np.all(np.diff(self.end_time[mask]) > 0):
+                    raise ValueError(f"End times must be strictly increasing for patient {pid}")
+        # Validate that start_state != end_state for all transitions
+        if np.any(self.start_state == self.end_state):
+            raise ValueError("Start state and end state must differ for all transitions.")

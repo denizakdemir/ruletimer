@@ -20,7 +20,7 @@ class MockRuleEnsemble(BaseRuleEnsemble):
     
     def __init__(self):
         super().__init__()
-        self.rules_ = ["feature_0 <= 0.5", "feature_1 > 0.3"]
+        self._rules_tuples = ["feature_0 <= 0.5", "feature_1 > 0.3"]
         self.rule_weights_ = np.array([0.8, -0.5])
         self.state_structure = StateStructure(
             states=["Healthy", "Mild", "Severe"],
@@ -111,7 +111,7 @@ def test_plot_state_occupation(mock_model, sample_data):
 def test_plot_rule_importance_empty(mock_model):
     """Test rule importance plotting with empty rules"""
     plt.close('all')
-    mock_model.rules_ = []
+    mock_model._rules_tuples = []
     mock_model.rule_weights_ = np.array([])
     plot_rule_importance(mock_model)
     assert plt.get_fignums()  # Check if figure was created
@@ -173,7 +173,7 @@ def test_plot_state_occupation_single_state(mock_model, sample_data):
 def test_plot_rule_importance_custom_names(mock_model):
     """Test plotting rule importance with custom rule names"""
     plt.close('all')
-    mock_model.rules_ = ["Custom Rule 1", "Custom Rule 2", "Custom Rule 3"]
+    mock_model._rules_tuples = ["Custom Rule 1", "Custom Rule 2", "Custom Rule 3"]
     mock_model.rule_weights_ = np.array([0.8, -0.5, 0.3])
     plot_rule_importance(mock_model)
     assert plt.get_fignums()  # Check if figure was created
@@ -199,7 +199,7 @@ def test_plot_cumulative_incidence_custom_labels(mock_model, sample_data):
 def test_plot_rule_importance_no_rules(mock_model):
     """Test plotting rule importance with no rules"""
     plt.close('all')
-    mock_model.rules_ = []
+    mock_model._rules_tuples = []
     mock_model.rule_weights_ = np.array([])
     plot_rule_importance(mock_model)
     assert plt.get_fignums()  # Check if figure was created
@@ -243,7 +243,7 @@ def test_plot_state_occupation_empty_probs(mock_model, sample_data):
 def test_plot_rule_importance_dict_weights(mock_model):
     """Test plotting rule importance with dictionary weights"""
     plt.close('all')
-    mock_model.rules_ = ["Rule 1", "Rule 2"]
+    mock_model._rules_tuples = ["Rule 1", "Rule 2"]
     mock_model.rule_weights_ = {
         (1, 2): np.array([0.5, -0.3]),
         (2, 3): np.array([0.2, 0.4])
@@ -276,7 +276,7 @@ def test_plot_state_transitions_no_rule_weights(mock_model, sample_data):
         states=["A", "B", "C"],
         transitions=[(1, 2), (2, 3)]
     )
-    mock_model.rules_ = ["Rule 1", "Rule 2"]
+    mock_model._rules_tuples = ["Rule 1", "Rule 2"]
     mock_model.rule_weights_ = {(1, 2): np.array([0.5, 0.3])}  # Missing (2, 3)
     mock_model.baseline_hazards_ = {(1, 2): (np.array([0, 1]), np.array([0.1, 0.2]))}
     plot_state_transitions(mock_model, sample_data, time=1.0)

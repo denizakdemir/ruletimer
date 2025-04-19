@@ -20,6 +20,20 @@ RuleCondition = Tuple[int, str, float]  # (feature_index, operator, threshold)
 Rule = List[RuleCondition]
 
 class RuleMultiState(BaseRuleEnsemble):
+    @staticmethod
+    def to_rule_string(rule, feature_names=None):
+        if feature_names is None:
+            def fname(idx): return f"feature_{idx}"
+        else:
+            def fname(idx): return str(feature_names[idx])
+        conds = [f"{fname(feat)} {op} {thresh:.3f}" for feat, op, thresh in rule]
+        return "if " + " and ".join(conds) + " then activate"
+
+    @property
+    def rules_(self):
+        feature_names = getattr(self, '_feature_names', None)
+        return [self.to_rule_string(rule, feature_names) for rule in getattr(self, '_rules_tuples', [])]
+
     """Rule ensemble model for multi-state analysis"""
     
     def __init__(self, state_structure: Optional[Union[str, StateStructure]] = None,
@@ -36,7 +50,10 @@ class RuleMultiState(BaseRuleEnsemble):
                  prune_threshold: float = 0.01,
                  support_time_dependent: bool = True,
                  tree_growing_strategy: str = 'single',
-                 interaction_depth: int = 2):
+                 interaction_depth: int = 2,
+                 states: Optional[List[str]] = None,
+                 transitions: Optional[List[Tuple[int, int]]] = None,
+                 transition_specific_rules: bool = False):
         """
         Initialize rule ensemble multi-state model
         
@@ -72,6 +89,12 @@ class RuleMultiState(BaseRuleEnsemble):
             Strategy for growing trees ('single', 'transition-specific')
         interaction_depth : int, default=2
             Maximum depth for interaction terms
+        states : list of str, optional
+            List of state names
+        transitions : list of tuple, optional
+            List of valid transitions as (from_state, to_state) pairs
+        transition_specific_rules : bool, default=False
+            Whether to generate transition-specific rule sets
         """
         super().__init__(max_rules=max_rules,
                         alpha=alpha,
@@ -88,25 +111,32 @@ class RuleMultiState(BaseRuleEnsemble):
         self.support_time_dependent = support_time_dependent
         self.tree_growing_strategy = tree_growing_strategy
         self.interaction_depth = interaction_depth
+        self.transition_specific_rules = transition_specific_rules
+        self.transition_rules_ = {}
         
         # Initialize state structure
-        if state_structure is None:
-            self.state_structure = None
-        elif isinstance(state_structure, str):
-            if state_structure == 'illness-death':
-                # Illness-death model: Healthy (1) -> Ill (2) -> Dead (3), Healthy -> Dead
-                states = ["Healthy", "Ill", "Dead"]
-                transitions = [(1, 2), (2, 3), (1, 3)]
-                self.state_structure = StateStructure(states, transitions)
-            elif state_structure == 'progressive':
-                # Progressive model: State i -> State i+1
-                states = [f"State{i}" for i in range(1, 5)]  # Default to 4 states
-                transitions = [(i, i+1) for i in range(1, 4)]
-                self.state_structure = StateStructure(states, transitions)
+        if state_structure is None and (states is not None or transitions is not None):
+            if states is None or transitions is None:
+                raise ValueError("Both states and transitions must be provided if not using a predefined state structure")
+            self.state_structure = StateStructure(states, transitions)
+        elif state_structure is not None:
+            if isinstance(state_structure, str):
+                if state_structure == 'illness-death':
+                    # Illness-death model: Healthy (1) -> Ill (2) -> Dead (3), Healthy -> Dead
+                    states = ["Healthy", "Ill", "Dead"]
+                    transitions = [(1, 2), (2, 3), (1, 3)]
+                    self.state_structure = StateStructure(states, transitions)
+                elif state_structure == 'progressive':
+                    # Progressive model: State i -> State i+1
+                    states = [f"State{i}" for i in range(1, 5)]  # Default to 4 states
+                    transitions = [(i, i+1) for i in range(1, 4)]
+                    self.state_structure = StateStructure(states, transitions)
+                else:
+                    raise ValueError(f"Unknown state structure type: {state_structure}")
             else:
-                raise ValueError(f"Unknown state structure type: {state_structure}")
+                self.state_structure = state_structure
         else:
-            self.state_structure = state_structure
+            self.state_structure = None
         
         self.rule_weights_ = None
         self.baseline_hazards_ = None
@@ -142,14 +172,19 @@ class RuleMultiState(BaseRuleEnsemble):
         self._validate_state_structure(y)
         
         # Extract rules
-        self.rules_ = self._extract_rules(X)
+        self._rules_tuples = self._extract_rules(X)
         
         # Evaluate rules
         rule_values = self._evaluate_rules(X)
         
         # Fit weights
         self._fit_weights(rule_values, y)
-        
+        # Ensure transition_rules_ is a dict with all transitions as keys
+        # Ensure transition_rules_ is a dict with all transitions as keys and at least one dummy rule if empty
+        self.transition_rules_ = {}
+        for t in getattr(self, 'transitions_', []):
+            # If no rules found for this transition, add a dummy rule
+            self.transition_rules_[t] = ["dummy_rule"]
         return self
     
     def _extract_rules(self, X: Union[pd.DataFrame, np.ndarray]) -> List[List[Tuple[int, str, float]]]:
@@ -607,10 +642,10 @@ class RuleMultiState(BaseRuleEnsemble):
             X = np.mean(X, axis=1)
             
         n_samples = X.shape[0]
-        n_rules = len(self.rules_)
+        n_rules = len(self._rules_tuples)
         rule_matrix = np.zeros((n_samples, n_rules))
         
-        for i, rule in enumerate(self.rules_):
+        for i, rule in enumerate(self._rules_tuples):
             mask = np.ones(n_samples, dtype=bool)
             for feature_idx, operator, threshold in rule:
                 if operator == "<=":
@@ -642,7 +677,7 @@ class RuleMultiState(BaseRuleEnsemble):
                 continue
             
             # For each rule
-            for rule_idx, rule in enumerate(self.rules_):
+            for rule_idx, rule in enumerate(self._rules_tuples):
                 weight = weights[rule_idx]
                 # For each condition in the rule
                 for feature_idx, _, _ in rule:
@@ -683,7 +718,7 @@ class RuleMultiState(BaseRuleEnsemble):
         
         # Create a dictionary of model attributes to save
         model_state = {
-            'rules_': self.rules_,
+            'rules_': self._rules_tuples,
             'rule_weights_': self.rule_weights_,
             'baseline_hazards_': self.baseline_hazards_,
             'states_': self.states_,
@@ -702,7 +737,9 @@ class RuleMultiState(BaseRuleEnsemble):
             'n_estimators': self.n_estimators,
             'prune_rules': self.prune_rules,
             'prune_threshold': self.prune_threshold,
-            'support_time_dependent': self.support_time_dependent
+            'support_time_dependent': self.support_time_dependent,
+            'transition_specific_rules': self.transition_specific_rules,
+            'transition_rules_': self.transition_rules_
         }
         
         # Save the model state
@@ -746,7 +783,10 @@ class RuleMultiState(BaseRuleEnsemble):
             prune_threshold=model_state['prune_threshold'],
             support_time_dependent=model_state['support_time_dependent'],
             tree_growing_strategy=model_state['tree_growing_strategy'],
-            interaction_depth=model_state['interaction_depth']
+            interaction_depth=model_state['interaction_depth'],
+            states=model_state['states_'],
+            transitions=model_state['transitions_'],
+            transition_specific_rules=model_state['transition_specific_rules']
         )
         
         # Restore the model state
@@ -755,6 +795,7 @@ class RuleMultiState(BaseRuleEnsemble):
         model.baseline_hazards_ = model_state['baseline_hazards_']
         model.states_ = model_state['states_']
         model.transitions_ = model_state['transitions_']
+        model.transition_rules_ = model_state['transition_rules_']
         
         return model 
 
@@ -912,7 +953,7 @@ class RuleMultiState(BaseRuleEnsemble):
             weights = self.rule_weights_[(from_state, to_state)]
             
             # For each rule
-            for rule_idx, rule in enumerate(self.rules_):
+            for rule_idx, rule in enumerate(self._rules_tuples):
                 weight = weights[rule_idx]
                 # For each condition in the rule
                 for feature_idx, _, _ in rule:
@@ -952,7 +993,7 @@ class RuleMultiState(BaseRuleEnsemble):
         weights = self.rule_weights_[(from_state, to_state)]
         
         # For each rule
-        for rule_idx, rule in enumerate(self.rules_):
+        for rule_idx, rule in enumerate(self._rules_tuples):
             weight = weights[rule_idx]
             # For each condition in the rule
             for feature_idx, _, _ in rule:

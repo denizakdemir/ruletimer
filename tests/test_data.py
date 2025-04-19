@@ -55,7 +55,7 @@ def test_multi_state_initialization():
     start_state = np.array([1, 2, 1, 2])  # States start from 1
     end_state = np.array([2, 3, 2, 3])    # States start from 1
     
-    data = MultiState(patient_id, start_time, end_time, start_state, end_state)
+    data = MultiState(start_time, end_time, start_state, end_state, patient_id)
     assert np.array_equal(data.patient_id, patient_id)
     assert np.array_equal(data.start_time, start_time)
     assert np.array_equal(data.end_time, end_time)
@@ -67,21 +67,20 @@ def test_multi_state_validation():
     # Test invalid time ordering
     with pytest.raises(ValueError):
         MultiState(
-            np.array([1, 1]),
-            np.array([2, 1]),  # Invalid: times not ordered
-            np.array([3, 2]),
-            np.array([1, 2]),
-            np.array([2, 3])
-        )
-    
+            np.array([1, 2]),  # start_time
+            np.array([2, 1]),  # end_time (invalid: not ordered)
+            np.array([1, 1]),  # start_state
+            np.array([2, 2]),  # end_state
+            patient_id=np.array([1, 1])
+        )  
     # Test invalid state transitions (same start and end state)
     with pytest.raises(ValueError):
         MultiState(
-            np.array([1, 1]),
-            np.array([0, 1]),
-            np.array([1, 2]),
-            np.array([1, 1]),  # Start state
-            np.array([1, 1])   # Same as start state
+            np.array([1, 1]),  # start_time
+            np.array([0, 1]),  # end_time
+            np.array([1, 2]),  # start_state
+            np.array([1, 1]),  # end_state (invalid: same as start state)
+            np.array([1, 1])   # patient_id
         )
     
     # Test mismatched lengths
@@ -102,7 +101,7 @@ def test_multi_state_patient_ordering():
     start_state = np.array([1, 2, 1, 2])  # States start from 1
     end_state = np.array([2, 3, 2, 3])    # States start from 1
     
-    data = MultiState(patient_id, start_time, end_time, start_state, end_state)
-    # Check if times are properly ordered within each patient
-    assert np.all(np.diff(data.start_time[data.patient_id == 1]) >= 0)
-    assert np.all(np.diff(data.start_time[data.patient_id == 2]) >= 0) 
+    data = MultiState(start_time, end_time, start_state, end_state, patient_id)
+    # Check if times are strictly increasing within each patient
+    assert np.all(np.diff(data.start_time[data.patient_id == 1]) > 0)
+    assert np.all(np.diff(data.start_time[data.patient_id == 2]) > 0) 

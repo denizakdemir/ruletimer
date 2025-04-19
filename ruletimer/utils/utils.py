@@ -6,10 +6,10 @@ from typing import List, Tuple, Dict, Set, Optional
 import numpy as np
 
 class StateStructure:
-    """Class for managing multi-state model structure"""
+    """Class for managing multi-state model structure (0-based indexing)"""
     
     def __init__(self, states: List[str], transitions: List[Tuple[int, int]],
-                 initial_state: int = 1):
+                 initial_state: int = 0):
         """
         Initialize state structure
         
@@ -18,9 +18,9 @@ class StateStructure:
         states : list of str
             List of state names
         transitions : list of tuple
-            List of allowed transitions as (from_state, to_state) pairs using 1-based indexing
-        initial_state : int, default=1
-            Index of initial state (1-based)
+            List of allowed transitions as (from_state, to_state) pairs using 0-based indexing
+        initial_state : int, default=0
+            Index of initial state (0-based)
         """
         self.states = states
         self.transitions = transitions
@@ -130,14 +130,14 @@ class StateStructure:
         Parameters
         ----------
         state : int
-            State index (1-based)
-            
+            State index (0-based)
+        
         Returns
         -------
         name : str
             State name
         """
-        return self.states[state - 1]
+        return self.states[state]
     
     def get_state_index(self, name: str) -> int:
         """
@@ -147,10 +147,10 @@ class StateStructure:
         ----------
         name : str
             State name
-            
+        
         Returns
         -------
         index : int
-            State index (1-based)
+            State index (0-based)
         """
-        return self.states.index(name) + 1 
+        return self.states.index(name)
