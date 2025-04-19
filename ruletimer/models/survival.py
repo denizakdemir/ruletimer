@@ -301,6 +301,70 @@ class RuleSurvivalCox(RuleSurvival):
         self.l1_ratio = l1_ratio
         self.random_state = random_state
         
+    def predict_transition_hazard(
+        self,
+        X: np.ndarray,
+        times: np.ndarray,
+        from_state: Union[str, int],
+        to_state: Union[str, int]
+    ) -> np.ndarray:
+        """
+        Predict transition-specific hazard.
+        
+        Parameters
+        ----------
+        X : array-like
+            Covariate values
+        times : array-like
+            Times at which to predict hazard
+        from_state : str or int
+            Starting state
+        to_state : str or int
+            Target state
+            
+        Returns
+        -------
+        np.ndarray
+            Predicted hazard values
+        """
+        if not self.is_fitted_:
+            raise ValueError("Model must be fitted before prediction")
+            
+        # Convert states to internal indices
+        from_idx = self.state_manager.to_internal_index(from_state)
+        to_idx = self.state_manager.to_internal_index(to_state)
+        transition = (from_idx, to_idx)
+        
+        if transition not in self.transition_models_:
+            raise ValueError(f"No model for transition {transition}")
+            
+        # Evaluate rules on input data
+        rule_matrix = self._evaluate_rules(X)
+        
+        # Get relative hazard from model
+        relative_hazard = self.transition_models_[transition].predict(rule_matrix)
+        
+        # Get baseline hazard for each time point
+        baseline_hazard = np.zeros(len(times))
+        baseline_times, baseline_values = self.baseline_hazards_[transition]
+        
+        for i, t in enumerate(times):
+            # Find the closest baseline time
+            idx = np.searchsorted(baseline_times, t)
+            if idx == 0:
+                baseline_hazard[i] = baseline_values[0]
+            elif idx == len(baseline_times):
+                baseline_hazard[i] = baseline_values[-1]
+            else:
+                # Linear interpolation
+                t0, t1 = baseline_times[idx-1:idx+1]
+                h0, h1 = baseline_values[idx-1:idx+1]
+                baseline_hazard[i] = h0 + (h1 - h0) * (t - t0) / (t1 - t0)
+                
+        # Compute hazard for each sample and time point
+        hazard = np.exp(relative_hazard[:, np.newaxis]) * baseline_hazard[np.newaxis, :]
+        return hazard
+        
     def _fit_transition_model(
         self,
         X: np.ndarray,
@@ -359,7 +423,7 @@ class RuleSurvivalCox(RuleSurvival):
         for tree in forest.estimators_:
             rules.extend(self._extract_rules_from_tree(tree.tree_))
         return rules[:self.max_rules]
-    
+        
     def _extract_rules_from_tree(self, tree):
         """Extract rules from a single tree."""
         rules = []
@@ -381,7 +445,7 @@ class RuleSurvivalCox(RuleSurvival):
         
         recurse(0, [])
         return rules
-    
+        
     def _evaluate_rules(self, X):
         """Evaluate rules on data."""
         rule_matrix = np.zeros((X.shape[0], len(self.rules_)))
@@ -394,7 +458,7 @@ class RuleSurvivalCox(RuleSurvival):
                     mask &= (X[:, feature] > threshold)
             rule_matrix[:, i] = mask
         return rule_matrix
-    
+        
     def _compute_feature_importances(self):
         """Compute feature importances from rules."""
         # Get number of features from the first rule's first condition's feature index
