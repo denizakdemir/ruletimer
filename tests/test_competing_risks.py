@@ -19,7 +19,7 @@ def test_fine_gray_model():
     y = CompetingRisks(times, events)
     
     # Fit model
-    model = RuleCompetingRisks(model_type='fine-gray', max_rules=10)
+    model = RuleCompetingRisks(event_types=['event1', 'event2'], model_type='fine-gray', max_rules=10)
     model.fit(X, y)
     
     # Test predictions
@@ -46,7 +46,7 @@ def test_cause_specific_model():
     y = CompetingRisks(times, events)
     
     # Fit model
-    model = RuleCompetingRisks(model_type='cause-specific', max_rules=10)
+    model = RuleCompetingRisks(event_types=['event1', 'event2'], model_type='cause-specific', max_rules=10)
     model.fit(X, y)
     
     # Test predictions
@@ -74,7 +74,7 @@ def test_rule_generation():
     # Test different tree growing strategies
     strategies = ['single', 'forest', 'interaction']
     for strategy in strategies:
-        model = RuleCompetingRisks(tree_growing_strategy=strategy, max_rules=10)
+        model = RuleCompetingRisks(event_types=['event1', 'event2'], tree_growing_strategy=strategy, max_rules=10)
         model.fit(X, y)
         
         # Check rules were generated
@@ -93,7 +93,7 @@ def test_feature_importance():
     y = CompetingRisks(times, events)
     
     # Fit model
-    model = RuleCompetingRisks(max_rules=10)
+    model = RuleCompetingRisks(event_types=['event1', 'event2'], max_rules=10)
     model.fit(X, y)
     
     # Check feature importance
@@ -118,7 +118,7 @@ def test_time_dependent_covariates():
     y = CompetingRisks(times, events)
     
     # Fit model
-    model = RuleCompetingRisks(support_time_dependent=True, max_rules=10)
+    model = RuleCompetingRisks(event_types=['event1', 'event2'], support_time_dependent=True, max_rules=10)
     model.fit(X, y)
     
     # Test predictions

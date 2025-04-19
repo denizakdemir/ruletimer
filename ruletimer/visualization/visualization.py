@@ -9,7 +9,6 @@ from typing import Dict, List, Union, Optional, Tuple
 import pandas as pd
 from ..models.base import BaseRuleEnsemble
 from ..models.competing_risks import RuleCompetingRisks
-from ..models.multi_state import RuleMultiState
 
 def plot_rule_importance(model: BaseRuleEnsemble,
                         top_n: int = 10,
@@ -35,7 +34,7 @@ def plot_rule_importance(model: BaseRuleEnsemble,
     
     # Handle different model types
     if hasattr(model, 'rule_weights_') and isinstance(model.rule_weights_, dict):
-        # For competing risks and multi-state models, average weights across events/transitions
+        # For competing risks models, average weights across events
         weights = np.zeros(len(rules))
         for event_weights in model.rule_weights_.values():
             weights += np.abs(event_weights)
@@ -137,7 +136,7 @@ def plot_state_transitions(model: BaseRuleEnsemble,
     Parameters
     ----------
     model : BaseRuleEnsemble
-        Fitted multi-state model
+        Fitted model
     X : array-like of shape (n_samples, n_features)
         Data to predict for
     time : float
@@ -199,9 +198,12 @@ def plot_state_transitions(model: BaseRuleEnsemble,
             mid_y = (start_y + end_y) / 2
             plt.text(mid_x, mid_y, f"{prob:.2f}", ha='center', va='center')
     
+    plt.xlim(-1.5, 1.5)
+    plt.ylim(-1.5, 1.5)
     plt.axis('equal')
     plt.axis('off')
-    plt.title(f"State Transition Diagram at Time {time}")
+    plt.title("State Transition Diagram")
+    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
     plt.tight_layout()
 
 def plot_state_occupation(times: np.ndarray,
@@ -214,18 +216,17 @@ def plot_state_occupation(times: np.ndarray,
                        ylabel: str = "Probability",
                        legend_loc: str = "best") -> None:
     """
-    Plot state occupation probabilities over time.
+    Plot state occupation probabilities over time
     
     Parameters
     ----------
-    times : array-like of shape (n_times,)
-        Time points at which probabilities are evaluated
+    times : array-like
+        Time points
     state_probs : dict
-        Dictionary mapping state indices to arrays of shape (n_samples, n_times)
-        containing state occupation probabilities
+        Dictionary mapping state indices to arrays of probabilities
     state_names : list of str, optional
-        Names of states to use in legend. If None, uses state indices.
-    figsize : tuple of int, default=(10, 6)
+        Names of states
+    figsize : tuple, default=(10, 6)
         Figure size
     alpha : float, default=0.1
         Transparency of confidence intervals
@@ -236,142 +237,115 @@ def plot_state_occupation(times: np.ndarray,
     ylabel : str, default="Probability"
         Y-axis label
     legend_loc : str, default="best"
-        Location of legend
+        Legend location
     """
-    plt.figure(figsize=figsize)
-    
-    # Sort states for consistent colors
-    states = sorted(state_probs.keys())
-    if len(states) < 2:
+    if len(state_probs) < 2:
         raise ValueError("At least two states are required to plot state occupation probabilities.")
     
-    # Plot each state
-    for state_num in states:
-        # Get probabilities for this state
-        probs = state_probs[state_num]
-        
-        # Get state name
-        state_name = state_names[state_num-1] if state_names else f"State {state_num}"
-        
-        # Calculate mean and confidence intervals
-        mean_probs = np.mean(probs, axis=0)
-        std_probs = np.std(probs, axis=0)
-        ci_lower = mean_probs - 1.96 * std_probs
-        ci_upper = mean_probs + 1.96 * std_probs
-        
-        # Plot mean line and confidence interval
-        plt.plot(times, mean_probs, label=state_name)
-        plt.fill_between(times, ci_lower, ci_upper, alpha=alpha)
+    plt.figure(figsize=figsize)
     
-    plt.title(title)
+    colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEEAD']
+    
+    for i, (state_idx, probs) in enumerate(state_probs.items()):
+        mean_prob = np.mean(probs, axis=0)
+        std_prob = np.std(probs, axis=0)
+        
+        label = f"State {state_idx}" if state_names is None else state_names[state_idx - 1]
+        plt.plot(times, mean_prob, label=label, color=colors[i % len(colors)])
+        plt.fill_between(times,
+                        mean_prob - 1.96 * std_prob,
+                        mean_prob + 1.96 * std_prob,
+                        alpha=alpha,
+                        color=colors[i % len(colors)])
+    
     plt.xlabel(xlabel)
     plt.ylabel(ylabel)
+    plt.title(title)
+    plt.grid(True, alpha=0.3)
     plt.legend(loc=legend_loc)
-    plt.grid(True)
+    plt.tight_layout()
 
-def plot_importance_comparison(model: Union[RuleCompetingRisks, RuleMultiState],
+def plot_importance_comparison(model: RuleCompetingRisks,
                              top_n: int = 10,
                              figsize: tuple = (12, 8)) -> None:
     """
-    Plot comparison of global and event-specific importance measures
+    Plot rule importance comparison across event types
     
     Parameters
     ----------
-    model : RuleCompetingRisks or RuleMultiState
-        Fitted model
+    model : RuleCompetingRisks
+        Fitted competing risks model
     top_n : int, default=10
-        Number of top features to plot
+        Number of top rules to plot
     figsize : tuple, default=(12, 8)
         Figure size
     """
-    # Get feature names
-    feature_names = model._feature_names
+    rules = model.get_rules()
     
-    # Get global importance
-    global_importance = model.get_global_importance()
-    
-    # Get event/transition specific importance
-    if isinstance(model, RuleCompetingRisks):
-        specific_importance = model.get_all_event_importances()
-        labels = {event: f"Event {event}" for event in specific_importance.keys()}
-    else:  # RuleMultiState
-        specific_importance = model.get_all_transition_importances()
-        labels = {trans: f"{trans[0]}→{trans[1]}" for trans in specific_importance.keys()}
-    
-    # Get top features based on global importance
-    top_n = min(top_n, len(feature_names))
-    top_idx = np.argsort(global_importance)[-top_n:]
-    top_features = [feature_names[i] for i in top_idx]
+    # Get top rules across all event types
+    all_weights = np.zeros(len(rules))
+    for event_weights in model.rule_weights_.values():
+        all_weights += np.abs(event_weights)
+    top_idx = np.argsort(all_weights)[-top_n:]
     
     # Create plot
     plt.figure(figsize=figsize)
     
-    # Create y positions for bars
-    y_pos = np.arange(top_n)
+    x = np.arange(len(top_idx))
+    width = 0.8 / len(model.rule_weights_)
     
-    # Plot global importance
-    plt.barh(y_pos, global_importance[top_idx], 
-             label='Global', alpha=0.7)
+    for i, (event_type, weights) in enumerate(model.rule_weights_.items()):
+        plt.bar(x + i * width,
+               weights[top_idx],
+               width,
+               label=f"Event {event_type}")
     
-    # Plot event/transition specific importance
-    for i, (key, importance) in enumerate(specific_importance.items()):
-        plt.barh(y_pos, importance[top_idx],
-                 label=labels[key], alpha=0.7,
-                 left=global_importance[top_idx] if i == 0 else None)
-    
-    plt.yticks(y_pos, top_features)
-    plt.xlabel("Importance Score")
-    plt.title("Feature Importance Comparison")
+    plt.xlabel("Rules")
+    plt.ylabel("Weight")
+    plt.title("Rule Importance by Event Type")
+    plt.xticks(x + width * (len(model.rule_weights_) - 1) / 2,
+               [rules[i] for i in top_idx],
+               rotation=45,
+               ha='right')
     plt.legend()
     plt.tight_layout()
 
-def plot_importance_heatmap(model: Union[RuleCompetingRisks, RuleMultiState],
+def plot_importance_heatmap(model: RuleCompetingRisks,
                           top_n: int = 10,
                           figsize: tuple = (12, 8)) -> None:
     """
-    Plot heatmap of feature importance across events/transitions
+    Plot rule importance heatmap
     
     Parameters
     ----------
-    model : RuleCompetingRisks or RuleMultiState
-        Fitted model
+    model : RuleCompetingRisks
+        Fitted competing risks model
     top_n : int, default=10
-        Number of top features to plot
+        Number of top rules to plot
     figsize : tuple, default=(12, 8)
         Figure size
     """
-    # Get feature names
-    feature_names = model._feature_names
+    rules = model.get_rules()
     
-    # Get global importance
-    global_importance = model.get_global_importance()
+    # Get top rules across all event types
+    all_weights = np.zeros(len(rules))
+    for event_weights in model.rule_weights_.values():
+        all_weights += np.abs(event_weights)
+    top_idx = np.argsort(all_weights)[-top_n:]
     
-    # Get event/transition specific importance
-    if isinstance(model, RuleCompetingRisks):
-        specific_importance = model.get_all_event_importances()
-        labels = [f"Event {event}" for event in specific_importance.keys()]
-    else:  # RuleMultiState
-        specific_importance = model.get_all_transition_importances()
-        labels = [f"{trans[0]}→{trans[1]}" for trans in specific_importance.keys()]
-    
-    # Get top features based on global importance
-    top_n = min(top_n, len(feature_names))
-    top_idx = np.argsort(global_importance)[-top_n:]
-    top_features = [feature_names[i] for i in top_idx]
-    
-    # Create importance matrix
-    importance_matrix = np.zeros((len(specific_importance), top_n))
-    for i, importance in enumerate(specific_importance.values()):
-        importance_matrix[i] = importance[top_idx]
+    # Create weight matrix
+    weight_matrix = np.zeros((len(top_idx), len(model.rule_weights_)))
+    for i, (event_type, weights) in enumerate(model.rule_weights_.items()):
+        weight_matrix[:, i] = weights[top_idx]
     
     # Create plot
     plt.figure(figsize=figsize)
-    sns.heatmap(importance_matrix, 
-                xticklabels=top_features,
-                yticklabels=labels,
-                cmap='YlOrRd',
+    sns.heatmap(weight_matrix,
+                xticklabels=[f"Event {k}" for k in model.rule_weights_.keys()],
+                yticklabels=[rules[i] for i in top_idx],
+                cmap='RdBu',
+                center=0,
                 annot=True,
-                fmt='.2f',
-                cbar_kws={'label': 'Importance Score'})
-    plt.title("Feature Importance Heatmap")
+                fmt='.2f')
+    plt.title("Rule Importance Heatmap")
     plt.tight_layout() 

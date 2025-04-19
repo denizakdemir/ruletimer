@@ -2,155 +2,53 @@
 Utility classes and functions
 """
 
-from typing import List, Tuple, Dict, Set, Optional
-import numpy as np
-
 class StateStructure:
-    """Class for managing multi-state model structure (0-based indexing)"""
+    """Class for managing state structure in multi-state models"""
     
-    def __init__(self, states: List[str], transitions: List[Tuple[int, int]],
-                 initial_state: int = 0):
+    def __init__(self, states, transitions):
         """
         Initialize state structure
         
         Parameters
         ----------
-        states : list of str
+        states : list
             List of state names
-        transitions : list of tuple
-            List of allowed transitions as (from_state, to_state) pairs using 0-based indexing
-        initial_state : int, default=0
-            Index of initial state (0-based)
+        transitions : list of tuples
+            List of valid transitions as (from_state_idx, to_state_idx) pairs
         """
         self.states = states
         self.transitions = transitions
-        self.initial_state = initial_state
-        
-        # Build transition dictionaries
-        self._next_states = {}
-        self._previous_states = {}
-        
-        for from_state, to_state in transitions:
-            if from_state not in self._next_states:
-                self._next_states[from_state] = set()
-            if to_state not in self._previous_states:
-                self._previous_states[to_state] = set()
-            
-            self._next_states[from_state].add(to_state)
-            self._previous_states[to_state].add(from_state)
+        self._state_to_idx = {state: idx for idx, state in enumerate(states)}
+        self._idx_to_state = {idx: state for idx, state in enumerate(states)}
     
-    def transitions_from_state(self, state: int) -> Set[int]:
-        """
-        Get all possible next states from a given state
-        
-        Parameters
-        ----------
-        state : int
-            Current state index (1-based)
-            
-        Returns
-        -------
-        next_states : set of int
-            Set of possible next state indices (1-based)
-        """
-        return self._next_states.get(state, set())
+    def get_state_index(self, state):
+        """Get index of a state"""
+        return self._state_to_idx[state]
     
-    def transition_idx(self, from_state: int, to_state: int) -> Optional[Tuple[int, int]]:
-        """
-        Get the transition tuple for a given state pair if it exists
-        
-        Parameters
-        ----------
-        from_state : int
-            Starting state index (1-based)
-        to_state : int
-            Target state index (1-based)
-            
-        Returns
-        -------
-        transition : tuple or None
-            (from_state, to_state) tuple if transition exists, None otherwise
-        """
-        return (from_state, to_state) if (from_state, to_state) in self.transitions else None
+    def get_state_name(self, idx):
+        """Get name of a state"""
+        return self._idx_to_state[idx]
     
-    def get_next_states(self, state: int) -> Set[int]:
-        """
-        Get states that can be reached from the given state
-        
-        Parameters
-        ----------
-        state : int
-            Current state (1-based)
-            
-        Returns
-        -------
-        next_states : set of int
-            Set of states that can be reached from the current state (1-based)
-        """
-        return self._next_states.get(state, set())
-    
-    def get_previous_states(self, state: int) -> Set[int]:
-        """
-        Get states that can reach the given state
-        
-        Parameters
-        ----------
-        state : int
-            Current state (1-based)
-            
-        Returns
-        -------
-        previous_states : set of int
-            Set of states that can reach the current state (1-based)
-        """
-        return self._previous_states.get(state, set())
-    
-    def is_valid_transition(self, from_state: int, to_state: int) -> bool:
-        """
-        Check if a transition is valid
-        
-        Parameters
-        ----------
-        from_state : int
-            Starting state (1-based)
-        to_state : int
-            Target state (1-based)
-            
-        Returns
-        -------
-        is_valid : bool
-            True if the transition is valid, False otherwise
-        """
+    def is_valid_transition(self, from_state, to_state):
+        """Check if a transition is valid"""
         return (from_state, to_state) in self.transitions
     
-    def get_state_name(self, state: int) -> str:
-        """
-        Get the name of a state
-        
-        Parameters
-        ----------
-        state : int
-            State index (0-based)
-        
-        Returns
-        -------
-        name : str
-            State name
-        """
-        return self.states[state]
+    def get_next_states(self, state):
+        """Get all possible next states from a given state"""
+        return [to_state for from_state, to_state in self.transitions 
+                if from_state == state]
     
-    def get_state_index(self, name: str) -> int:
-        """
-        Get the index of a state by name
-        
-        Parameters
-        ----------
-        name : str
-            State name
-        
-        Returns
-        -------
-        index : int
-            State index (0-based)
-        """
-        return self.states.index(name)
+    def get_previous_states(self, state):
+        """Get all possible previous states to a given state"""
+        return [from_state for from_state, to_state in self.transitions 
+                if to_state == state]
+    
+    def transitions_from_state(self, state):
+        """Get all transitions from a given state"""
+        return [(from_state, to_state) for from_state, to_state in self.transitions 
+                if from_state == state]
+    
+    def transitions_to_state(self, state):
+        """Get all transitions to a given state"""
+        return [(from_state, to_state) for from_state, to_state in self.transitions 
+                if to_state == state] 

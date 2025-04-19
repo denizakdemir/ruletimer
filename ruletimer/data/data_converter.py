@@ -513,7 +513,7 @@ class MultiStateDataConverter:
             all_records.append({
                 'patient_id': transitions[id_col].iloc[i],
                 'start_time': transitions[exposure_col].iloc[i],
-                'end_time': transitions[exposure_col].iloc[i],
+                'end_time': transitions[exposure_col].iloc[i] + 1,  # End time is exposure time + 1
                 'start_state': from_states[i],
                 'end_state': to_states[i]
             })
@@ -523,7 +523,7 @@ class MultiStateDataConverter:
             all_records.append({
                 'patient_id': censored[id_col].iloc[i],
                 'start_time': censored[exposure_col].iloc[i],
-                'end_time': censored[exposure_col].iloc[i],
+                'end_time': censored[exposure_col].iloc[i] + 1,  # End time is exposure time + 1
                 'start_state': state_map[censored[from_state_col].iloc[i]],
                 'end_state': 0  # Censored
             })

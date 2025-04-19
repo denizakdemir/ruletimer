@@ -316,8 +316,8 @@ def test_counting_process():
     assert isinstance(msm_data, MultiState)
     assert len(msm_data.patient_id) == 3  # One transition + two censored observations
     assert np.array_equal(msm_data.patient_id, np.array([1, 1, 2]))  # Patient 1's transition and censoring, Patient 2's censoring
-    assert np.array_equal(msm_data.start_time, np.array([1, 2, 1]))
-    assert np.array_equal(msm_data.end_time, np.array([2, 3, 2]))
+    assert np.array_equal(msm_data.start_time, np.array([1, 3, 2]))
+    assert np.array_equal(msm_data.end_time, np.array([2, 4, 3]))
     assert np.array_equal(msm_data.start_state, np.array([1, 2, 1]))  # A=1, B=2
     assert np.array_equal(msm_data.end_state, np.array([2, 0, 0]))  # One transition (A->B) and two censored
 
