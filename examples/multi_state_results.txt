@@ -1,0 +1,56 @@
+Mean probabilities for each state:
+Healthy: 0.073
+Mild: 0.086
+Moderate: 0.050
+Severe: 0.791
+
+Global Feature Importance:
+feature_0: 0.4579
+feature_1: 0.2369
+feature_2: 0.0928
+feature_3: 0.1477
+feature_4: 0.0647
+
+Transition-Specific Feature Importance:
+
+Transition 1 → 2:
+feature_0: 0.5601
+feature_1: 0.0406
+feature_2: 0.0000
+feature_3: 0.3993
+feature_4: 0.0000
+
+Transition 2 → 3:
+feature_0: 0.3611
+feature_1: 0.5162
+feature_2: 0.1226
+feature_3: 0.0000
+feature_4: 0.0000
+
+Transition 3 → 4:
+feature_0: 0.0000
+feature_1: 0.0000
+feature_2: 0.0000
+feature_3: 0.0000
+feature_4: 0.0000
+
+Transition 1 → 3:
+feature_0: 0.2647
+feature_1: 0.0000
+feature_2: 0.7353
+feature_3: 0.0000
+feature_4: 0.0000
+
+Transition 2 → 4:
+feature_0: 0.3297
+feature_1: 0.3977
+feature_2: 0.0000
+feature_3: 0.2726
+feature_4: 0.0000
+
+Transition 1 → 4:
+feature_0: 0.5860
+feature_1: 0.0766
+feature_2: 0.1161
+feature_3: 0.0339
+feature_4: 0.1875

@@ -1,0 +1,9 @@
+Dataset Statistics:
+Number of samples: 1000
+Number of events: 730
+Censoring rate: 27.0%
+
+Follow-up Times (years):
+Mean: 0.700
+Median: 0.457
+Maximum: 7.066

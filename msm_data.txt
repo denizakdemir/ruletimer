@@ -1,0 +1,70 @@
+# Common Ways to Organize Multistate Regression Data with Censoring
+
+Censoring occurs when the complete information about a subject's state transitions is not fully observed. Here are the main ways multistate regression data is organized with censoring information included:
+
+## 1. Person-Period Format with Censoring
+```
+ID  Time  State  Censored  Covariate1  Covariate2
+1   1     A      0         25          Female
+1   2     B      0         25          Female
+1   3     B      1         25          Female
+2   1     A      0         42          Male
+2   2     A      1         42          Male
+```
+*Censored=1 indicates observation ended while in this state*
+
+## 2. Transition Format with Censoring
+```
+ID  FromState  ToState  StartTime  EndTime  Duration  Censored  Covariate1
+1   A          B        1          2        1         0         25
+1   B          B+       2          3        1         1         25
+2   A          A+       1          2        1         1         42
+```
+*"+" suffix or special code indicates right-censoring in final state*
+
+## 3. Long Format with Censoring Indicator
+```
+ID  Time  StateA  StateB  StateC  Censored  Covariate1
+1   1     1       0       0       0         25
+1   2     0       1       0       0         25
+1   3     0       1       0       1         25
+2   1     1       0       0       0         42
+2   2     1       0       0       1         42
+```
+
+## 4. Wide Format with Censoring
+```
+ID  State_T1  State_T2  State_T3  CensorTime  CensorState  Covariate1
+1   A         B         B         3           B            25
+2   A         A         NA        2           A            42
+```
+*NA indicates unobserved due to censoring*
+
+## 5. Counting Process Format with Censoring
+```
+ID  FromState  ToState  Count  Exposure  Censored  Covariate1
+1   A          B        1      1         0         25
+1   B          C        0      1         1         25
+2   A          B        0      2         1         42
+2   A          C        0      2         1         42
+```
+
+## 6. Interval Censoring Format
+```
+ID  LeftTime  RightTime  LeftState  RightState  Covariate1
+1   1         2          A          B           25
+1   2         3          B          B           25
+2   1         2          A          A           42
+2   2         4          A          ?           42
+```
+*? indicates unknown state at right time due to censoring*
+
+## 7. Event History Format with Censoring Types
+```
+ID  Time  Event  EventType  CensorType  Covariate1
+1   2     1      A→B        0           25
+1   3     0      NA         1           25
+2   2     0      NA         2           42
+```
+*CensorType: 0=observed, 1=right-censored, 2=interval-censored*
+

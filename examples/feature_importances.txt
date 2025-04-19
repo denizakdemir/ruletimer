@@ -1,0 +1,6 @@
+Feature Importances:
+age               0.2
+gender            0.2
+bmi               0.2
+blood_pressure    0.2
+smoking           0.2
