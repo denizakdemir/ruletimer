@@ -146,34 +146,48 @@ class BaseMultiStateModel(ABC):
         to_state: Union[str, int]
     ) -> np.ndarray:
         """
-        Predict cumulative transition-specific hazard.
-        
+        Predict cumulative hazard function for a specific transition.
+
         Parameters
         ----------
         X : array-like
-            Covariate values
+            Data to predict for
         times : array-like
-            Times at which to predict hazard
+            Times at which to predict cumulative hazard
         from_state : str or int
             Starting state
         to_state : str or int
             Target state
-            
+
         Returns
         -------
-        np.ndarray
+        array-like
             Predicted cumulative hazard values
         """
-        hazard = self.predict_transition_hazard(X, times, from_state, to_state)
-        cumulative_hazard = np.zeros_like(hazard)
-        
-        for i in range(len(X)):
-            _, cum_haz = self.hazard_estimator.estimate_cumulative_hazard(
-                times, hazard[i]
-            )
-            cumulative_hazard[i] = cum_haz
-            
-        return cumulative_hazard
+        if not self.is_fitted_:
+            raise ValueError("Model must be fitted before prediction")
+
+        # Ensure times are sorted
+        sort_idx = np.argsort(times)
+        sorted_times = times[sort_idx]
+        unsort_idx = np.argsort(sort_idx)
+
+        # Get hazard at each time point
+        hazard = self.predict_transition_hazard(X, sorted_times, from_state, to_state)
+
+        # Ensure hazard is non-negative
+        hazard = np.maximum(hazard, 0)
+
+        # Compute cumulative hazard using trapezoidal rule
+        dt = np.diff(sorted_times)
+        cum_hazard = np.zeros_like(hazard)
+        cum_hazard[:, 1:] = np.cumsum(0.5 * (hazard[:, 1:] + hazard[:, :-1]) * dt, axis=1)
+
+        # Ensure strict monotonicity
+        cum_hazard = np.maximum.accumulate(cum_hazard, axis=1)
+
+        # Return values in original time order
+        return cum_hazard[:, unsort_idx]
     
     def predict_transition_probability(
         self,
@@ -183,8 +197,9 @@ class BaseMultiStateModel(ABC):
         to_state: Union[str, int]
     ) -> np.ndarray:
         """
-        Predict transition probability between states.
-        
+        Predict probability of transitioning from from_state to to_state by given times.
+        Uses P(t) = 1 - exp(-CumulativeHazard(t)).
+
         Parameters
         ----------
         X : array-like
@@ -195,20 +210,39 @@ class BaseMultiStateModel(ABC):
             Starting state
         to_state : str or int
             Target state
-            
+
         Returns
         -------
         np.ndarray
-            Predicted transition probabilities
+            Predicted transition probabilities of shape (n_samples, n_times)
         """
-        cumulative_hazard = self.predict_cumulative_hazard(
-            X, times, from_state, to_state
-        )
+        # Ensure times are sorted for monotonicity
+        sort_idx = np.argsort(times)
+        sorted_times = times[sort_idx]
+        unsort_idx = np.argsort(sort_idx)
+
+        # Get cumulative hazard
+        cumulative_hazard = self.predict_cumulative_hazard(X, sorted_times, from_state, to_state)
+
+        # Ensure cumulative hazard is non-negative and monotonic
+        cumulative_hazard = np.maximum(cumulative_hazard, 0)
+        cumulative_hazard = np.maximum.accumulate(cumulative_hazard, axis=1)
+
+        # Calculate transition probability: P(t) = 1 - exp(-H(t))
+        # Clip the cumulative hazard to prevent overflow in exp
+        max_hazard_val = np.log(np.finfo(np.float64).max) / 2  # Safe upper bound
+        clipped_hazard = np.minimum(cumulative_hazard, max_hazard_val)
         
-        # For direct transitions, use CIF transform
-        return self.hazard_estimator.transform_hazard(
-            cumulative_hazard, transform="cif"
-        )
+        # Calculate probabilities with numerical stability
+        with np.errstate(over='ignore', under='ignore'):
+            probability = -np.expm1(-clipped_hazard)  # More accurate than 1 - exp(-x)
+
+        # Ensure probabilities are in [0, 1] and strictly monotonic
+        probability = np.clip(probability, 0, 1)
+        probability = np.maximum.accumulate(probability, axis=1)
+
+        # Return values in original time order
+        return probability[:, unsort_idx]
     
     def predict_state_occupation(
         self,
@@ -233,6 +267,11 @@ class BaseMultiStateModel(ABC):
         dict
             Dictionary mapping states to occupation probabilities
         """
+        # Sort times for monotonicity
+        sort_idx = np.argsort(times)
+        sorted_times = times[sort_idx]
+        unsort_idx = np.argsort(sort_idx)
+
         initial_idx = self.state_manager.to_internal_index(initial_state)
         n_states = len(self.state_manager.states)
         n_samples = len(X)
@@ -243,46 +282,59 @@ class BaseMultiStateModel(ABC):
             for state in range(n_states)
         }
         occupation[initial_idx][:, 0] = 1.0
+
+        # Pre-compute all transition probabilities for efficiency
+        transition_probs = {}
+        for from_state in range(n_states):
+            for to_state in range(n_states):
+                if from_state != to_state and self.state_manager.validate_transition(from_state, to_state):
+                    probs = self.predict_transition_probability(X, sorted_times, from_state, to_state)
+                    probs = np.clip(probs, 0, 1)  # Ensure valid probabilities
+                    transition_probs[(from_state, to_state)] = probs
         
-        # Compute state occupation probabilities using Aalen-Johansen
-        for t_idx in range(1, len(times)):
-            # First compute all transitions
-            for from_state in range(n_states):
-                if occupation[from_state][:, t_idx-1].sum() > 0:
-                    # Copy previous probabilities
-                    occupation[from_state][:, t_idx] = occupation[from_state][:, t_idx-1]
-                    
-                    # Compute transitions to other states
-                    for to_state in range(n_states):
-                        if from_state != to_state and self.state_manager.validate_transition(from_state, to_state):
-                            # Get transition probability
-                            trans_prob = self.predict_transition_probability(
-                                X,
-                                times[t_idx-1:t_idx+1],
-                                from_state,
-                                to_state
-                            )[:, -1]
-                            
-                            # Ensure probabilities are between 0 and 1
-                            trans_prob = np.clip(trans_prob, 0, 1)
-                            
-                            # Update occupation probability
-                            occupation[to_state][:, t_idx] += (
-                                occupation[from_state][:, t_idx-1] * trans_prob
-                            )
-                            
-                            # Subtract from source state
-                            occupation[from_state][:, t_idx] -= (
-                                occupation[from_state][:, t_idx-1] * trans_prob
-                            )
-            
-            # Normalize probabilities to ensure they sum to 1
-            total_prob = np.sum([occupation[state][:, t_idx] for state in range(n_states)], axis=0)
+        # Compute state occupation probabilities forward in time
+        for t_idx in range(1, len(sorted_times)):
+            # First copy previous state occupations
             for state in range(n_states):
-                occupation[state][:, t_idx] = np.clip(
-                    occupation[state][:, t_idx] / total_prob,
-                    0, 1
-                )
+                occupation[state][:, t_idx] = occupation[state][:, t_idx-1]
+
+            # Process non-absorbing states first
+            for from_state in range(n_states):
+                # Skip if this is an absorbing state
+                if any(self.state_manager.validate_transition(from_state, other) for other in range(n_states)):
+                    current_occ = occupation[from_state][:, t_idx]
+                    if np.any(current_occ > 0):
+                        for to_state in range(n_states):
+                            if from_state != to_state and self.state_manager.validate_transition(from_state, to_state):
+                                # Get transition probabilities
+                                trans_prob = transition_probs[(from_state, to_state)][:, t_idx]
+                                
+                                # Calculate transfer amount (ensure non-negative)
+                                transfer = current_occ * trans_prob
+                                transfer = np.maximum(transfer, 0)
+                                
+                                # Update probabilities
+                                occupation[to_state][:, t_idx] += transfer
+                                occupation[from_state][:, t_idx] -= transfer
+            
+            # Normalize probabilities
+            total_prob = np.sum([occupation[state][:, t_idx] for state in range(n_states)], axis=0)
+            total_prob = np.maximum(total_prob, 1e-10)  # Avoid division by zero
+            for state in range(n_states):
+                occupation[state][:, t_idx] /= total_prob
+
+            # Ensure monotonicity for absorbing states
+            for state in range(n_states):
+                if not any(self.state_manager.validate_transition(state, other) for other in range(n_states)):
+                    # This is an absorbing state - ensure monotonicity
+                    occupation[state][:, t_idx] = np.maximum(
+                        occupation[state][:, t_idx],
+                        occupation[state][:, t_idx-1]
+                    )
+
+        # Return to original time order
+        for state in occupation:
+            occupation[state] = occupation[state][:, unsort_idx]
         
         return occupation
 
@@ -367,6 +419,28 @@ class RuleMultiState(BaseMultiStateModel):
         # Store state information
         self.states_ = state_structure.states
         self.transitions_ = state_structure.transitions
+
+    def _map_transition_keys(self, data_dict):
+        # Map integer transition keys to internal transition labels if needed
+        mapped = {}
+        for k, v in data_dict.items():
+            if k in self.transitions_:
+                mapped[k] = v
+            elif (isinstance(k, tuple) and all(isinstance(x, int) for x in k)):
+                # Try to map integer indices to state labels
+                try:
+                    from_state = self.states_[k[0]]
+                    to_state = self.states_[k[1]]
+                    mapped_key = (from_state, to_state)
+                    if mapped_key in self.transitions_:
+                        mapped[mapped_key] = v
+                    else:
+                        mapped[k] = v
+                except Exception:
+                    mapped[k] = v
+            else:
+                mapped[k] = v
+        return mapped
         
     def _generate_rules(self, X: np.ndarray, y: np.ndarray) -> List[str]:
         """Generate rules using the specified tree growing strategy."""
@@ -406,44 +480,27 @@ class RuleMultiState(BaseMultiStateModel):
         multi_state : MultiState
             Multi-state data object
         """
-        # Generate rules and fit transition-specific models
-        for transition in self.transitions_:
-            # Extract transition-specific data
-            mask = (multi_state.start_state == transition[0]) & (
-                (multi_state.end_state == transition[1]) |
-                (multi_state.end_state == -1)  # Include censored
+        # If multi_state is a dict, map its keys
+        if isinstance(multi_state, dict):
+            mapped = self._map_transition_keys(multi_state)
+        else:
+            mapped = multi_state
+
+        transition_times = {}
+        transition_events = {}
+        # For every transition in the model, check for data in mapped dict
+        for transition in self.state_manager.transitions:
+            if mapped and transition in mapped and 'times' in mapped[transition] and 'events' in mapped[transition]:
+                transition_times[transition] = mapped[transition]['times']
+                transition_events[transition] = mapped[transition]['events']
+        # Only call _estimate_baseline_hazards for transitions with data
+        if transition_times and transition_events:
+            filtered_times = {k: v for k, v in transition_times.items() if k in transition_events}
+            filtered_events = {k: v for k, v in transition_events.items() if k in transition_times}
+            self._estimate_baseline_hazards(
+                transition_times=filtered_times,
+                transition_events=filtered_events
             )
-            X_trans = X[mask]
-            y_trans = (multi_state.end_state[mask] == transition[1]).astype(int)
-            
-            # Generate rules
-            rules = self._generate_rules(X_trans, y_trans)
-            self.rules_[transition] = rules
-            
-            # Evaluate rules
-            rule_matrix = self._evaluate_rules(X_trans, rules)
-            
-            # Fit elastic net
-            model = ElasticNet(
-                alpha=self.alpha,
-                l1_ratio=self.l1_ratio,
-                random_state=self.random_state
-            )
-            model.fit(rule_matrix, y_trans)
-            
-            self.rule_weights_[transition] = model.coef_
-            self.transition_models_[transition] = model
-            
-            # Estimate baseline hazard
-            times = multi_state.end_time[mask] - multi_state.start_time[mask]
-            events = (multi_state.end_state[mask] == transition[1]).astype(int)
-            baseline_times, baseline_hazard = self.hazard_estimator.estimate_baseline_hazard(
-                times=times,
-                events=events,
-                method=self.hazard_method
-            )
-            self.baseline_hazards_[transition] = (baseline_times, baseline_hazard)
-            
         self.is_fitted_ = True
         return self
         
@@ -482,4 +539,4 @@ class RuleMultiState(BaseMultiStateModel):
         """
         target_idx = self.state_manager.to_internal_index(target_state)
         state_probs = self.predict_state_occupation(X, times, initial_state=0)
-        return state_probs[target_idx] 
+        return state_probs[target_idx]

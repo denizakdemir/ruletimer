@@ -19,10 +19,26 @@ class StateStructure:
             List of state names. If not provided, state indices will be used as names.
         """
         self.states = states
-        self.transitions = transitions
+        # Map integer transitions to state values if needed
+        if len(states) > 0 and not all(isinstance(s, int) for s in states):
+            # If states are not all int, map int transitions to state values
+            mapped_transitions = []
+            for from_state, to_state in transitions:
+                if isinstance(from_state, int) and from_state < len(states):
+                    from_state_val = states[from_state]
+                else:
+                    from_state_val = from_state
+                if isinstance(to_state, int) and to_state < len(states):
+                    to_state_val = states[to_state]
+                else:
+                    to_state_val = to_state
+                mapped_transitions.append((from_state_val, to_state_val))
+            self.transitions = mapped_transitions
+        else:
+            self.transitions = transitions
         
         # Validate transitions
-        for from_state, to_state in transitions:
+        for from_state, to_state in self.transitions:
             if from_state not in states or to_state not in states:
                 raise ValueError(f"Invalid transition {(from_state, to_state)}: states must be in {states}")
         
@@ -94,4 +110,4 @@ class StateStructure:
     def get_transition_names(self):
         """Get list of all transitions with state names"""
         return [(self.get_state_name(from_state), self.get_state_name(to_state))
-                for from_state, to_state in self.transitions] 
+                for from_state, to_state in self.transitions]

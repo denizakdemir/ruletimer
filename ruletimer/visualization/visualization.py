@@ -36,39 +36,50 @@ def plot_rule_importance(rules: Union[Dict[Tuple[int, int], List[str]], BaseRule
     if isinstance(rules, BaseRuleEnsemble):
         # Get rules and importances from model
         rules_dict = rules.rules_
-        importances_dict = rules.rule_importances_
+        importances_dict = rules.get_rule_importances()
     else:
         rules_dict = rules
         importances_dict = importances
     
-    # Check if importances are available and non-empty
-    if not importances_dict or not any(len(imp) > 0 for imp in importances_dict.values()):
-        raise ValueError("No importances provided")
-    
+    # Check if importances are provided
+    if importances_dict is None:
+         raise ValueError("Importances must be provided if rules is a dict")
+
     # Flatten rules and importances
     flat_rules = []
     flat_importances = []
-    for transition, trans_rules in rules_dict.items():
-        if transition in importances_dict and len(trans_rules) > 0:
-            flat_rules.extend([f"{transition}: {rule}" for rule in trans_rules])
-            flat_importances.extend(importances_dict[transition])
-    
+    # Ensure rules_dict is not None and is iterable
+    if rules_dict:
+        for transition, trans_rules in rules_dict.items():
+            # Check if transition exists in importances and has corresponding rules/importances
+            if transition in importances_dict and len(trans_rules) > 0 and len(importances_dict[transition]) == len(trans_rules):
+                flat_rules.extend([f"{transition}: {rule}" for rule in trans_rules])
+                flat_importances.extend(importances_dict[transition])
+            elif transition in importances_dict and len(trans_rules) == 0 and len(importances_dict[transition]) == 0:
+                # Handle case where a transition exists but has no rules/importances
+                pass # Or log a warning if needed
+            # Optional: Add handling for mismatches or missing keys if necessary
+
     if not flat_rules:
-        # If no rules, create a dummy plot
+        # If no valid rules/importances were found after flattening
         fig = plt.figure(figsize=figsize)
-        plt.text(0.5, 0.5, "No rules found", ha='center', va='center')
+        plt.text(0.5, 0.5, "No rules with importances found to plot", ha='center', va='center')
         plt.axis('off')
+        plt.title("Rule Importance") # Add title for consistency
+        plt.tight_layout() # Ensure layout is adjusted
         return fig
     
     # Get top rules
     top_n = min(top_n, len(flat_rules))
-    idx = np.argsort(np.abs(flat_importances))[-top_n:]
+    # Ensure flat_importances is a numpy array for argsort
+    flat_importances_np = np.array(flat_importances)
+    idx = np.argsort(np.abs(flat_importances_np))[-top_n:]
     top_rules = [flat_rules[i] for i in idx]
-    top_importances = np.array(flat_importances)[idx]
+    top_importances = flat_importances_np[idx]
     
     # Create plot
     fig = plt.figure(figsize=figsize)
-    plt.barh(range(len(top_rules)), np.abs(top_importances))
+    plt.barh(range(len(top_rules)), np.abs(top_importances)) # Use absolute importance for bar height
     plt.yticks(range(len(top_rules)), top_rules)
     plt.xlabel("Absolute Importance")
     plt.title("Rule Importance")
@@ -82,7 +93,7 @@ def plot_cumulative_incidence(model: BaseRuleEnsemble,
                             figsize: tuple = (10, 6)):
     """
     Plot cumulative incidence functions with confidence intervals
-    
+
     Parameters
     ----------
     model : BaseRuleEnsemble
@@ -108,43 +119,43 @@ def plot_cumulative_incidence(model: BaseRuleEnsemble,
         raise ValueError("Times array cannot be empty")
         
     if times is None:
-        times = np.linspace(0, model._y.time.max(), 100)
+        if hasattr(model, '_y') and hasattr(model._y, 'time') and len(model._y.time) > 0:
+            times = np.linspace(0, model._y.time.max(), 100)
+        else:
+            times = np.linspace(0, 1, 100)
+
+    # Get predictions for all requested event types at once
+    predictions = model.predict_cumulative_incidence(X, times, event_types=event_types)
     
-    # Get predictions for each event type
-    cif = {}
-    for event_type in event_types:
-        cif[event_type] = model.predict_cumulative_incidence(X, times, event_type=f"Event{event_type}")
-    
-    # Create plot
-    fig = plt.figure(figsize=figsize)
-    
-    # Define colors for different event types
-    colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEEAD']
-    
+    # Set up plot
+    plt.figure(figsize=figsize)
+    colors = ['blue', 'red', 'green', 'orange', 'purple']
+
+    # Plot each event type
     for i, event_type in enumerate(event_types):
-        # Calculate mean and standard deviation
-        mean_cif = np.mean(cif[event_type], axis=0)
-        std_cif = np.std(cif[event_type], axis=0)
+        if event_type not in predictions:
+            raise KeyError(f"Prediction for event type {event_type} not found in model output.")
+            
+        mean_cif = np.mean(predictions[event_type], axis=0)
+        std_cif = np.std(predictions[event_type], axis=0)
         
-        # Plot mean CIF
         plt.plot(times, mean_cif, 
                 label=f"Event {event_type}", 
                 color=colors[i % len(colors)])
         
-        # Add confidence intervals
         plt.fill_between(times, 
-                        mean_cif - 1.96 * std_cif,
-                        mean_cif + 1.96 * std_cif,
-                        alpha=0.2,
+                        np.maximum(mean_cif - 1.96 * std_cif, 0),
+                        np.minimum(mean_cif + 1.96 * std_cif, 1),
+                        alpha=0.2, 
                         color=colors[i % len(colors)])
     
-    plt.xlabel("Time")
-    plt.ylabel("Cumulative Incidence")
-    plt.title("Cumulative Incidence Functions")
-    plt.grid(True, alpha=0.3)
+    plt.xlabel('Time')
+    plt.ylabel('Cumulative Incidence')
+    plt.title('Cumulative Incidence Functions')
     plt.legend()
-    plt.tight_layout()
-    return fig
+    plt.grid(True)
+    
+    return plt.gcf()
 
 def plot_state_transitions(model: BaseRuleEnsemble,
                          X: Union[np.ndarray, pd.DataFrame],
@@ -367,4 +378,4 @@ def plot_importance_heatmap(model: RuleCompetingRisks,
                 annot=True,
                 fmt='.2f')
     plt.title("Rule Importance Heatmap")
-    plt.tight_layout() 
+    plt.tight_layout()

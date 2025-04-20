@@ -224,10 +224,8 @@ class RuleCompetingRisks(BaseMultiStateModel):
             
         # Handle time-dependent covariates
         if self.support_time_dependent and X.ndim == 3:
-            # For time-dependent covariates, we'll use the values at each time point
-            # This is a simple approach - more sophisticated methods could be implemented
-            X = X[:, :, 0]  # Use features at first time point for now
-            # TODO: Implement proper handling of time-dependent covariates
+            # For time-dependent covariates, use values at first time point for now
+            X = X[:, :, 0]
         
         # Evaluate rules on input data
         rule_matrix = self._evaluate_rules(X)
@@ -239,102 +237,45 @@ class RuleCompetingRisks(BaseMultiStateModel):
         if len(baseline_times) == 0:
             return np.zeros((X.shape[0], len(times)))
         
+        # Sort times and values for monotonicity
+        sort_idx = np.argsort(baseline_times)
+        baseline_times = baseline_times[sort_idx]
+        baseline_values = baseline_values[sort_idx]
+
+        # Ensure baseline hazard is non-negative and monotonic
+        baseline_values = np.maximum(baseline_values, 0)
+        baseline_values = np.maximum.accumulate(baseline_values)
+        
         # Create interpolation function for baseline hazard
+        # Use monotonic interpolation to preserve monotonicity
         baseline_interp = interp1d(
             baseline_times,
             baseline_values,
             kind='linear',
             bounds_error=False,
-            fill_value=(baseline_values[0], baseline_values[-1])
+            fill_value=(0, baseline_values[-1])
         )
         
-        # Get interpolated baseline hazard values
+        # Get interpolated baseline hazard values and ensure monotonicity
         interpolated_baseline = baseline_interp(times)
+        interpolated_baseline = np.maximum(interpolated_baseline, 0)
+        interpolated_baseline = np.maximum.accumulate(interpolated_baseline)
         
-        # Get relative hazard from elastic net model
-        relative_hazard = np.exp(self.transition_models_[transition].predict(rule_matrix))
+        # Get relative hazard from elastic net model and ensure it's positive
+        relative_hazard = np.exp(np.clip(
+            self.transition_models_[transition].predict(rule_matrix),
+            -50, 50  # Prevent numerical overflow
+        ))
         
-        # Compute final hazard by multiplying baseline and relative hazard
-        # Expand relative hazard to match shape of times
+        # Convert shapes for broadcasting
         relative_hazard = relative_hazard.reshape(-1, 1)  # Shape: (n_samples, 1)
         interpolated_baseline = interpolated_baseline.reshape(1, -1)  # Shape: (1, n_times)
         
-        return relative_hazard * interpolated_baseline
-    
-    def predict_cumulative_incidence(
-        self,
-        X: np.ndarray,
-        times: np.ndarray,
-        event_type: Optional[str] = None
-    ) -> Union[np.ndarray, Dict[str, np.ndarray]]:
-        """
-        Predict cumulative incidence functions.
+        # Compute final hazard and ensure numerical stability
+        hazard = relative_hazard * interpolated_baseline
+        hazard = np.maximum(hazard, 1e-50)
         
-        Parameters
-        ----------
-        X : array-like
-            Data to predict for
-        times : array-like
-            Times at which to predict CIF
-        event_type : str, optional
-            Specific event type to predict for. If None, returns all event types.
-            
-        Returns
-        -------
-        Union[np.ndarray, Dict[str, np.ndarray]]
-            If event_type is specified: array of CIF values
-            If event_type is None: dict mapping event types to CIF values
-        """
-        if not self.is_fitted_:
-            raise ValueError("Model must be fitted before making predictions")
-            
-        # Sort times to ensure monotonicity
-        times = np.sort(times)
-        
-        if event_type is not None:
-            if event_type not in self.event_types:
-                raise ValueError(f"Unknown event type: {event_type}")
-            state = self.event_type_to_state[event_type]
-            cif = self.predict_transition_probability(X, times, 0, state)
-            
-            # Ensure monotonicity
-            cif = np.maximum.accumulate(cif, axis=1)
-            
-            # Ensure values are between 0 and 1
-            cif = np.clip(cif, 0, 1)
-            
-            return cif
-        
-        # Get CIFs for all event types
-        cifs = {}
-        for evt_type in self.event_types:
-            state = self.event_type_to_state[evt_type]
-            cif = self.predict_transition_probability(X, times, 0, state)
-            
-            # Ensure monotonicity for each event type
-            cif = np.maximum.accumulate(cif, axis=1)
-            
-            # Ensure values are between 0 and 1
-            cif = np.clip(cif, 0, 1)
-            
-            cifs[evt_type] = cif
-        
-        # Normalize CIFs to ensure they sum to at most 1
-        cif_sum = np.zeros((len(X), len(times)))
-        for evt_type in self.event_types:
-            cif_sum += cifs[evt_type]
-        
-        # Only normalize where sum exceeds 1
-        mask = cif_sum > 1
-        if np.any(mask):
-            for evt_type in self.event_types:
-                cifs[evt_type][mask] = cifs[evt_type][mask] / cif_sum[mask]
-        
-        # Final check to ensure all CIFs are between 0 and 1
-        for evt_type in self.event_types:
-            cifs[evt_type] = np.clip(cifs[evt_type], 0, 1)
-        
-        return cifs
+        return hazard
     
     def predict_cause_specific_hazard(
         self,
@@ -359,15 +300,115 @@ class RuleCompetingRisks(BaseMultiStateModel):
         np.ndarray
             Predicted cause-specific hazard values
         """
-        # Convert event type to state if it's a string
-        if isinstance(event_type, str):
-            if event_type not in self.event_types:
-                raise ValueError(f"Unknown event type: {event_type}")
-            state = self.event_type_to_state[event_type]
-        else:
-            state = event_type
+        if isinstance(event_type, int):
+            event_type = f"Event{event_type}"
             
+        if event_type not in self.event_types:
+            raise ValueError(f"Unknown event type: {event_type}")
+        state = self.event_type_to_state[event_type]
+        
         return self.predict_transition_hazard(X, times, 0, state)
+        
+    def predict_cumulative_incidence(
+        self,
+        X: np.ndarray,
+        times: np.ndarray,
+        event_type: Optional[Union[str, int]] = None,
+        event_types: Optional[List[Union[str, int]]] = None
+    ) -> Union[np.ndarray, Dict[Union[str, int], np.ndarray]]:
+        """Predict cumulative incidence functions."""
+        if not self.is_fitted_:
+            raise ValueError("Model must be fitted before making predictions")
+
+        # Determine which event types to process
+        if event_types is not None:
+            target_event_types = event_types
+        elif event_type is not None:
+            target_event_types = [event_type]
+        else:
+            target_event_types = ["Event1", "Event2"]  # Default event types
+
+        # Convert all event types to string format for internal processing
+        processed_event_types = []
+        for et in target_event_types:
+            if isinstance(et, int):
+                processed_et = f"Event{et}"
+            else:
+                processed_et = et
+            if processed_et not in self.event_type_to_state:
+                raise KeyError(f"Invalid event type requested: {et}")
+            processed_event_types.append(processed_et)
+
+        # Sort times for monotonicity
+        sort_idx = np.argsort(times)
+        sorted_times = times[sort_idx]
+        unsort_idx = np.argsort(sort_idx)
+
+        # Get cause-specific hazards for each event type
+        hazards = {}
+        for et in processed_event_types:
+            hazards[et] = self.predict_cause_specific_hazard(X, sorted_times, et)
+
+        # Process CIFs in sorted time order
+        n_samples = len(X)
+        n_times = len(sorted_times)
+        dt = np.diff(np.concatenate([[0], sorted_times]))
+
+        # Initialize CIFs
+        cifs = {et: np.zeros((n_samples, n_times)) for et in processed_event_types}
+        overall_survival = np.ones((n_samples, n_times))
+
+        # Compute CIFs using Aalen-Johansen estimator
+        for t in range(n_times):
+            if t > 0:
+                # Start with previous values
+                for et in processed_event_types:
+                    cifs[et][:, t] = cifs[et][:, t-1]
+
+            # Get total hazard at this time point
+            total_hazard = sum(h[:, t] for h in hazards.values())
+
+            # Update overall survival
+            if t > 0:
+                overall_survival[:, t] = overall_survival[:, t-1] * np.exp(-total_hazard * dt[t])
+
+            # Update CIFs
+            for et in processed_event_types:
+                increment = overall_survival[:, t] * hazards[et][:, t] * dt[t]
+                cifs[et][:, t] += increment
+
+        # Ensure monotonicity and proper bounds
+        for et in processed_event_types:
+            cifs[et] = np.maximum.accumulate(cifs[et], axis=1)
+            cifs[et] = np.clip(cifs[et], 0, 1)
+
+        # Normalize CIFs to ensure they sum to ≤ 1
+        cif_sum = np.sum([cifs[et] for et in processed_event_types], axis=0)
+        mask = cif_sum > 1
+        if np.any(mask):
+            scale = np.where(mask, cif_sum, 1.0)
+            for et in processed_event_types:
+                cifs[et][:, mask] /= scale[:, mask]
+
+        # Convert back to original time order
+        result = {et: cifs[et][:, unsort_idx] for et in processed_event_types}
+
+        # Return based on original request format
+        if event_types is not None:
+            # Map string keys back to original format
+            mapped_result = {}
+            for et in target_event_types:
+                if isinstance(et, int):
+                    mapped_result[et] = result[f"Event{et}"]
+                else:
+                    mapped_result[et] = result[et]
+            return mapped_result
+        elif event_type is not None:
+            if isinstance(event_type, int):
+                return result[f"Event{event_type}"]
+            return result[event_type]
+        else:
+            return result
     
     def predict_hazard(self, X: np.ndarray, times: np.ndarray) -> Dict[str, np.ndarray]:
         """

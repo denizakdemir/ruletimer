@@ -185,4 +185,119 @@ def test_error_handling():
     
     # Test invalid l1_ratio
     with pytest.raises(ValueError):
-        RuleMultiState(l1_ratio=1.5) 
+        RuleMultiState(l1_ratio=1.5)
+
+def test_empty_and_single_row():
+    """Test model with empty and single-row datasets."""
+    X_empty = np.empty((0, 2))
+    X_single = np.array([[1, 2]])
+    states = ['a', 'b']
+    transitions = [(0, 1)]
+    state_structure = StateStructure(states=states, transitions=transitions)
+    model = RuleMultiState(state_structure=state_structure)
+    # Should not raise error on fit with empty data
+    with pytest.raises(Exception):
+        model.fit(X_empty, {(0, 1): {'times': np.array([]), 'events': np.array([])}})
+    # Single row
+    model.fit(X_single, {(0, 1): {'times': np.array([1.0]), 'events': np.array([1])}})
+    preds = model.predict_cumulative_incidence(X_single, np.array([1.0]), 1)
+    assert preds.shape == (1, 1)
+    assert np.all(preds >= 0) and np.all(preds <= 1)
+
+def test_all_censored():
+    """Test model with all transitions censored."""
+    X = np.random.randn(5, 2)
+    states = ['a', 'b']
+    transitions = [(0, 1)]
+    state_structure = StateStructure(states=states, transitions=transitions)
+    model = RuleMultiState(state_structure=state_structure)
+    # All events are censored (0)
+    model.fit(X, {(0, 1): {'times': np.ones(5), 'events': np.zeros(5)}})
+    preds = model.predict_cumulative_incidence(X, np.array([1.0, 2.0]), 1)
+    assert np.all(preds >= 0) and np.all(preds <= 1)
+    assert np.allclose(preds, 0)
+
+def test_missing_transition():
+    """Test model with missing transitions for some states."""
+    X = np.random.randn(4, 2)
+    states = ['a', 'b', 'c']
+    transitions = [(0, 1)]  # No (1,2) or (0,2)
+    state_structure = StateStructure(states=states, transitions=transitions)
+    model = RuleMultiState(state_structure=state_structure)
+    model.fit(X, {(0, 1): {'times': np.ones(4), 'events': np.array([1, 0, 1, 0])}})
+    # Should not raise error for missing transitions
+    preds = model.predict_cumulative_incidence(X, np.array([1.0]), 1)
+    assert preds.shape == (4, 1)
+
+def test_large_state_space():
+    """Test scalability with many states and transitions."""
+    n_states = 10
+    states = [str(i) for i in range(n_states)]
+    transitions = [(i, i+1) for i in range(n_states-1)]
+    state_structure = StateStructure(states=states, transitions=transitions)
+    X = np.random.randn(20, 3)
+    transition_data = {t: {'times': np.random.rand(20), 'events': np.random.randint(0, 2, 20)} for t in transitions}
+    model = RuleMultiState(state_structure=state_structure, max_rules=3)
+    model.fit(X, transition_data)
+    for t in transitions:
+        assert len(model.rules_[t]) <= 3
+
+def test_occupation_probability_sum():
+    """Test that state occupation probabilities sum to 1 at each time point."""
+    X = np.random.randn(10, 2)
+    states = ['a', 'b', 'c']
+    transitions = [(0, 1), (1, 2), (0, 2)]
+    state_structure = StateStructure(states=states, transitions=transitions)
+    transition_data = {t: {'times': np.random.rand(10), 'events': np.random.randint(0, 2, 10)} for t in transitions}
+    model = RuleMultiState(state_structure=state_structure)
+    model.fit(X, transition_data)
+    times = np.linspace(0, 5, 10)
+    occ = model.predict_state_occupation(X, times, initial_state=0)
+    total = np.zeros((X.shape[0], len(times)))
+    for s in occ:
+        total += occ[s]
+    assert np.allclose(total, 1, atol=1e-5)
+
+def test_absorbing_state_monotonicity():
+    """Test that occupation probability for absorbing state is non-decreasing."""
+    X = np.random.randn(5, 2)
+    states = ['a', 'b', 'c']
+    transitions = [(0, 1), (1, 2), (0, 2)]
+    state_structure = StateStructure(states=states, transitions=transitions)
+    transition_data = {t: {'times': np.random.rand(5), 'events': np.random.randint(0, 2, 5)} for t in transitions}
+    model = RuleMultiState(state_structure=state_structure)
+    model.fit(X, transition_data)
+    times = np.linspace(0, 5, 10)
+    occ = model.predict_state_occupation(X, times, initial_state=0)
+    # State 2 is absorbing
+    diffs = np.diff(occ[2], axis=1)
+    assert np.all(diffs >= -1e-10)
+
+def test_feature_importance_normalization():
+    """Test that feature importances are non-negative and sum to 1."""
+    X = np.random.randn(6, 3)
+    states = ['a', 'b']
+    transitions = [(0, 1)]
+    state_structure = StateStructure(states=states, transitions=transitions)
+    model = RuleMultiState(state_structure=state_structure)
+    model.fit(X, {(0, 1): {'times': np.random.rand(6), 'events': np.random.randint(0, 2, 6)}})
+    importances = model.get_feature_importances((0, 1))
+    assert np.all(importances >= 0)
+    assert np.isclose(np.sum(importances), 1)
+
+def test_model_persistence(tmp_path):
+    """Test that model predictions are consistent after saving and loading."""
+    import joblib
+    X = np.random.randn(8, 2)
+    states = ['a', 'b']
+    transitions = [(0, 1)]
+    state_structure = StateStructure(states=states, transitions=transitions)
+    model = RuleMultiState(state_structure=state_structure)
+    model.fit(X, {(0, 1): {'times': np.random.rand(8), 'events': np.random.randint(0, 2, 8)}})
+    times = np.array([1.0, 2.0])
+    preds = model.predict_cumulative_incidence(X, times, 1)
+    path = tmp_path / 'model.joblib'
+    joblib.dump(model, path)
+    loaded = joblib.load(path)
+    preds2 = loaded.predict_cumulative_incidence(X, times, 1)
+    assert np.allclose(preds, preds2)

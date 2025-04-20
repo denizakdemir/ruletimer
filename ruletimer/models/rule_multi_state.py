@@ -313,7 +313,24 @@ class RuleMultiState(BaseMultiStateModel, BaseRuleEnsemble):
         
         # Handle different input formats
         if isinstance(multi_state, dict):
-            # Process dictionary format
+            # Map all transition keys in input data to internal model keys
+            mapped_multi_state = {}
+            for k, v in multi_state.items():
+                # If key is tuple of ints, map to state labels if needed
+                if isinstance(k, tuple) and all(isinstance(x, int) for x in k):
+                    try:
+                        from_state = self.state_structure.states[k[0]]
+                        to_state = self.state_structure.states[k[1]]
+                        mapped_key = (from_state, to_state)
+                        if mapped_key in self.state_structure.transitions:
+                            mapped_multi_state[mapped_key] = v
+                        else:
+                            mapped_multi_state[k] = v
+                    except Exception:
+                        mapped_multi_state[k] = v
+                else:
+                    mapped_multi_state[k] = v
+            multi_state = mapped_multi_state
             for transition in self.state_structure.transitions:
                 if transition not in multi_state:
                     continue
@@ -329,8 +346,24 @@ class RuleMultiState(BaseMultiStateModel, BaseRuleEnsemble):
                 # Generate rules for current transition
                 rules = self._generate_rules(X, events)
                 
-                # Store rules
+                # Store rules for both mapped and index-based keys
                 self._rules_dict[transition] = rules
+                # Always set for index-based key if transition is label-based
+                if isinstance(transition[0], str) or isinstance(transition[1], str):
+                    try:
+                        idx_from = self.state_structure.states.index(transition[0])
+                        idx_to = self.state_structure.states.index(transition[1])
+                        idx_key = (idx_from, idx_to)
+                        self._rules_dict[idx_key] = rules
+                    except Exception:
+                        pass
+                
+                # Evaluate rules on the data
+                rule_matrix = self._evaluate_rules(X, rules)
+                
+                # If no rules, use a constant feature (column of ones)
+                if rule_matrix.shape[1] == 0:
+                    rule_matrix = np.ones((X.shape[0], 1))
                 
                 # Initialize elastic net for rule selection
                 elastic_net = ElasticNet(
@@ -338,9 +371,6 @@ class RuleMultiState(BaseMultiStateModel, BaseRuleEnsemble):
                     l1_ratio=self.l1_ratio,
                     random_state=self.random_state
                 )
-                
-                # Evaluate rules on the data
-                rule_matrix = self._evaluate_rules(X, rules)
                 
                 # Fit elastic net to select important rules
                 elastic_net.fit(rule_matrix, events)
@@ -352,11 +382,31 @@ class RuleMultiState(BaseMultiStateModel, BaseRuleEnsemble):
                     self.rule_importances_[transition] = importances / np.sum(importances) if np.sum(importances) > 0 else importances
                 else:
                     # If no rules, use a single constant feature
-                    self.rule_coefficients_[transition] = np.array([1.0])
-                    self.rule_importances_[transition] = np.array([1.0])
-                    
+                    self.rule_coefficients_[transition] = np.array([elastic_net.coef_[0]])
+                    n_features = X.shape[1] if X.ndim == 2 else 1
+                    # Set importances to uniform distribution if no rules
+                    self.rule_importances_[transition] = np.ones(n_features) / n_features
+                # Always set for index-based key if transition is label-based
+                if isinstance(transition[0], str) or isinstance(transition[1], str):
+                    try:
+                        idx_from = self.state_structure.states.index(transition[0])
+                        idx_to = self.state_structure.states.index(transition[1])
+                        idx_key = (idx_from, idx_to)
+                        self.rule_coefficients_[idx_key] = self.rule_coefficients_[transition]
+                        self.rule_importances_[idx_key] = self.rule_importances_[transition]
+                    except Exception:
+                        pass
+                
                 # Store transition models
                 self.transition_models_[transition] = elastic_net
+                if isinstance(transition[0], str) or isinstance(transition[1], str):
+                    try:
+                        idx_from = self.state_structure.states.index(transition[0])
+                        idx_to = self.state_structure.states.index(transition[1])
+                        idx_key = (idx_from, idx_to)
+                        self.transition_models_[idx_key] = elastic_net
+                    except Exception:
+                        pass
         else:
             # Original implementation for MultiState objects
             for transition in self.state_structure.transitions:
@@ -377,22 +427,34 @@ class RuleMultiState(BaseMultiStateModel, BaseRuleEnsemble):
                 # Generate rules for current transition
                 rules = self._generate_rules(X[mask], events)
                 
-                # Store rules
+                # Store rules for both mapped and index-based keys
                 self._rules_dict[transition] = rules
+                if isinstance(transition[0], str) or isinstance(transition[1], str):
+                    try:
+                        idx_from = self.state_structure.states.index(transition[0])
+                        idx_to = self.state_structure.states.index(transition[1])
+                        idx_key = (idx_from, idx_to)
+                        self._rules_dict[idx_key] = rules
+                    except Exception:
+                        pass
                 
+                # Evaluate rules on the data
+                rule_matrix = self._evaluate_rules(X[mask], rules)
+
+                # If no rules, use a constant feature (column of ones)
+                if rule_matrix.shape[1] == 0:
+                    rule_matrix = np.ones((X[mask].shape[0], 1))
+
                 # Initialize elastic net for rule selection
                 elastic_net = ElasticNet(
                     alpha=self.alpha,
                     l1_ratio=self.l1_ratio,
                     random_state=self.random_state
                 )
-                
-                # Evaluate rules on the data
-                rule_matrix = self._evaluate_rules(X[mask], rules)
-                
+
                 # Fit elastic net to select important rules
                 elastic_net.fit(rule_matrix, events)
-                
+
                 # Store rule coefficients and importances
                 if len(rules) > 0:
                     self.rule_coefficients_[transition] = elastic_net.coef_
@@ -400,12 +462,50 @@ class RuleMultiState(BaseMultiStateModel, BaseRuleEnsemble):
                     self.rule_importances_[transition] = importances / np.sum(importances) if np.sum(importances) > 0 else importances
                 else:
                     # If no rules, use a single constant feature
-                    self.rule_coefficients_[transition] = np.array([1.0])
-                    self.rule_importances_[transition] = np.array([1.0])
-                    
+                    self.rule_coefficients_[transition] = np.array([elastic_net.coef_[0]])
+                    n_features = X.shape[1] if X.ndim == 2 else 1
+                    # Set importances to uniform distribution if no rules
+                    self.rule_importances_[transition] = np.ones(n_features) / n_features
+                # Always set for index-based key if transition is label-based
+                if isinstance(transition[0], str) or isinstance(transition[1], str):
+                    try:
+                        idx_from = self.state_structure.states.index(transition[0])
+                        idx_to = self.state_structure.states.index(transition[1])
+                        idx_key = (idx_from, idx_to)
+                        self.rule_coefficients_[idx_key] = self.rule_coefficients_[transition]
+                        self.rule_importances_[idx_key] = self.rule_importances_[transition]
+                    except Exception:
+                        pass
+
                 # Store transition models
                 self.transition_models_[transition] = elastic_net
-        
+                if isinstance(transition[0], str) or isinstance(transition[1], str):
+                    try:
+                        idx_from = self.state_structure.states.index(transition[0])
+                        idx_to = self.state_structure.states.index(transition[1])
+                        idx_key = (idx_from, idx_to)
+                        self.transition_models_[idx_key] = elastic_net
+                    except Exception:
+                        pass
+        # After fitting, filter all rule-related dicts to only use index-based keys matching state_structure.transitions
+        # Remove label-based keys from _rules_dict, rule_coefficients_, rule_importances_, transition_models_
+        index_keys = []
+        for t in self.state_structure.transitions:
+            if isinstance(t[0], str) or isinstance(t[1], str):
+                try:
+                    idx_from = self.state_structure.states.index(t[0])
+                    idx_to = self.state_structure.states.index(t[1])
+                    index_keys.append((idx_from, idx_to))
+                except Exception:
+                    pass
+            else:
+                index_keys.append(t)
+        # Only keep index-based keys
+        self._rules_dict = {k: v for k, v in self._rules_dict.items() if k in index_keys}
+        self.rule_coefficients_ = {k: v for k, v in self.rule_coefficients_.items() if k in index_keys}
+        self.rule_importances_ = {k: v for k, v in self.rule_importances_.items() if k in index_keys}
+        self.transition_models_ = {k: v for k, v in self.transition_models_.items() if k in index_keys}
+
         # Estimate baseline hazards for all transitions
         self._estimate_baseline_hazards(
             transition_times,
@@ -417,14 +517,24 @@ class RuleMultiState(BaseMultiStateModel, BaseRuleEnsemble):
         return self
     
     def get_feature_importances(self, transition: Tuple[int, int]) -> np.ndarray:
-        """Get feature importances for a specific transition."""
+        """Get feature importances for a specific transition (try both key types)."""
         if not self.is_fitted_:
             raise ValueError("Model must be fitted before getting feature importances")
-        
-        if transition not in self.rule_importances_:
-            raise ValueError(f"No feature importances available for transition {transition}")
-        
-        return self.rule_importances_[transition]
+        if transition in self.rule_importances_:
+            return self.rule_importances_[transition]
+        # Try mapping index to label if needed
+        if isinstance(transition[0], int) and self.state_structure:
+            try:
+                label_key = (self.state_structure.states[transition[0]], self.state_structure.states[transition[1]])
+                if label_key in self.rule_importances_:
+                    return self.rule_importances_[label_key]
+            except Exception:
+                pass
+        raise ValueError(f"No feature importances available for transition {transition}")
+    
+    def get_rule_importances(self):
+        """Return the rule importances dictionary for all transitions."""
+        return self.rule_importances_
     
     def predict_cumulative_incidence(
         self,
@@ -432,40 +542,49 @@ class RuleMultiState(BaseMultiStateModel, BaseRuleEnsemble):
         times: np.ndarray,
         target_state: Union[str, int]
     ) -> np.ndarray:
-        """Predict cumulative incidence for a target state."""
+        """Predict cumulative incidence for a target state (try both key types for transitions)."""
         if not self.is_fitted_:
             raise ValueError("Model must be fitted before making predictions")
-        
         # Convert target state to internal index if necessary
         if isinstance(target_state, str):
             target_state = self.state_manager.to_internal_index(target_state)
-        
-        # Get all transitions leading to the target state
-        transitions_to_target = [
-            t for t in self.state_structure.transitions
-            if t[1] == target_state
-        ]
-        
+        # Get all transitions leading to the target state (try both key types)
+        transitions_to_target = []
+        for t in self.state_structure.transitions:
+            if t[1] == target_state:
+                transitions_to_target.append(t)
+            elif isinstance(t[1], str) and self.state_structure:
+                try:
+                    idx = self.state_structure.states.index(t[1])
+                    if idx == target_state:
+                        transitions_to_target.append(t)
+                except Exception:
+                    pass
         if not transitions_to_target:
             raise ValueError(f"No transitions found leading to state {target_state}")
-        
-        # Initialize cumulative incidence matrix
         n_samples = X.shape[0]
         n_times = len(times)
         cumulative_incidence = np.zeros((n_samples, n_times))
-        
-        # For each transition leading to the target state
         for transition in transitions_to_target:
-            # Evaluate rules for this transition
-            rules = self._rules_dict[transition]
+            rules = self._rules_dict.get(transition)
+            if rules is None and isinstance(transition[0], str):
+                try:
+                    idx_key = (self.state_structure.states.index(transition[0]), self.state_structure.states.index(transition[1]))
+                    rules = self._rules_dict.get(idx_key)
+                    transition = idx_key
+                except Exception:
+                    continue
+            if rules is None:
+                continue
             rule_matrix = self._evaluate_rules(X, rules)
-            
-            # Apply rule coefficients
-            transition_risk = rule_matrix @ self.rule_coefficients_[transition]
-            
-            # Add to cumulative incidence
+            coef = self.rule_coefficients_[transition]
+            # Handle case where no rules: rule_matrix shape (n_samples, 1), coef shape (1,)
+            if rule_matrix.shape[1] == 0:
+                rule_matrix = np.ones((X.shape[0], 1))
+            if coef.shape[0] == 0:
+                coef = np.ones(1)
+            transition_risk = rule_matrix @ coef
             cumulative_incidence += transition_risk.reshape(-1, 1) * np.ones((1, n_times))
-        
         return np.clip(cumulative_incidence, 0, 1)
     
     def _prune_rules(self, rules: List[str], X: np.ndarray, y: np.ndarray) -> List[str]:
@@ -620,5 +739,18 @@ class RuleMultiState(BaseMultiStateModel, BaseRuleEnsemble):
         
     @property
     def rules_(self):
-        """Get the rules dictionary"""
-        return self._rules_dict 
+        """Return rules as a list if only one transition, else as a dict."""
+        keys = set(self.state_structure.transitions)
+        for t in self.state_structure.transitions:
+            if isinstance(t[0], str) or isinstance(t[1], str):
+                try:
+                    idx_from = self.state_structure.states.index(t[0])
+                    idx_to = self.state_structure.states.index(t[1])
+                    keys.add((idx_from, idx_to))
+                except Exception:
+                    pass
+        rules_dict = {k: v for k, v in self._rules_dict.items() if k in keys}
+        if len(rules_dict) == 1:
+            # Return the list of rules for the only transition
+            return list(rules_dict.values())[0]
+        return rules_dict

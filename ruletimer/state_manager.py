@@ -28,9 +28,13 @@ class StateManager:
     def _validate_transitions(self) -> None:
         """Validate transition definitions"""
         n_states = len(self.states)
+        all_int = all(isinstance(s, int) for s in self.states)
         for from_state, to_state in self.transitions:
-            if from_state >= n_states or to_state >= n_states:
-                raise ValueError(f"Invalid transition: state index out of range")
+            if all_int:
+                if not isinstance(from_state, int) or not isinstance(to_state, int):
+                    raise ValueError("Transition states must be integers if all states are integers.")
+                if from_state >= n_states or to_state >= n_states:
+                    raise ValueError(f"Invalid transition: state index out of range")
             if from_state == to_state:
                 raise ValueError(f"Invalid transition: self-transition not allowed")
     
@@ -190,4 +194,4 @@ class StateManager:
             if not self.validate_transition(indices[i], indices[i + 1]):
                 return False
                 
-        return True 
+        return True
