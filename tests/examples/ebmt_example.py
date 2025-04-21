@@ -14,7 +14,7 @@ from pymsm.datasets import load_ebmt
 from ruletimer.models.survival import RuleSurvivalCox
 from ruletimer.models.competing_risks import RuleCompetingRisks
 from ruletimer.data import CompetingRisks, Survival
-from ruletimer.visualization.visualization import plot_cumulative_incidence
+from ruletimer.visualization.visualization import plot_cumulative_incidence, plot_feature_importance
 
 # Load the EBMT dataset
 df = load_ebmt()
@@ -84,6 +84,9 @@ print("\nTop survival rules:")
 for rule in surv_model.rules_[(0, 1)][:3]:
     print(f"- {rule}")
 
+# Set feature names in models
+surv_model.feature_names_ = feature_names
+
 # Example 2: Competing risks analysis from Platelet Recovery
 # Focus on transitions from state 2 (Platelet Recovery)
 platelet_state = df[df['from'] == 2].copy()
@@ -140,6 +143,9 @@ for event_type in [1, 2]:  # 1: Relapse, 2: Death
 
 # Fit the model
 cr_model.fit(X_train_cr_transformed, y_train_cr)
+
+# Set feature names in models
+cr_model.feature_names_ = feature_names
 
 # Print baseline hazard information
 print("\nBaseline hazard information:")
@@ -248,6 +254,27 @@ plt.title('Cumulative Incidence Functions (Aalen-Johansen Estimator)')
 plt.legend()
 plt.grid(True)
 plt.savefig('ebmt_competing_risks.png')
+plt.close()
+
+# Model Interpretation Plots
+print("\nPlotting feature importance for survival model...")
+fig = plot_feature_importance(
+    surv_model, 
+    top_n=10, 
+    figsize=(12, 6),
+    title="Feature Importance - Survival from Initial State to Death"
+)
+plt.savefig('survival_feature_importance.png', bbox_inches='tight', dpi=300)
+plt.close()
+
+print("\nPlotting feature importance for competing risks model...")
+fig = plot_feature_importance(
+    cr_model, 
+    top_n=10, 
+    figsize=(12, 8),
+    title="Feature Importance - Competing Risks from Platelet Recovery"
+)
+plt.savefig('competing_risks_feature_importance.png', bbox_inches='tight', dpi=300)
 plt.close()
 
 print("\nAnalysis complete. The example demonstrates:")

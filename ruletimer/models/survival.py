@@ -737,3 +737,39 @@ class RuleSurvivalCox(RuleSurvival):
         hazard = np.maximum(hazard, 1e-50)
         
         return hazard
+
+    def get_rule_importances(self) -> Dict[Tuple[int, int], np.ndarray]:
+        """
+        Get the importance scores for each rule in the model.
+        
+        Returns
+        -------
+        dict
+            Dictionary mapping transitions to rule importance arrays
+        """
+        if not hasattr(self, 'rule_weights_'):
+            raise ValueError("Model must be fitted before getting rule importances")
+            
+        return self.rule_weights_
+
+    def get_variable_importances(self) -> Dict[str, float]:
+        """
+        Get the importance scores for each variable in the model.
+        
+        Returns
+        -------
+        dict
+            Dictionary mapping variable names to their importance scores
+        """
+        if not hasattr(self, 'feature_importances_'):
+            raise ValueError("Model must be fitted before getting variable importances")
+            
+        # Get feature names from the preprocessor if available
+        feature_names = getattr(self, 'feature_names_', 
+                              [f'feature_{i}' for i in range(len(self.feature_importances_))])
+        
+        # Create dictionary of variable importances
+        importances = dict(zip(feature_names, self.feature_importances_))
+        
+        # Sort by importance in descending order
+        return dict(sorted(importances.items(), key=lambda x: x[1], reverse=True))

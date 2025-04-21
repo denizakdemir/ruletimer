@@ -379,3 +379,88 @@ def plot_importance_heatmap(model: RuleCompetingRisks,
                 fmt='.2f')
     plt.title("Rule Importance Heatmap")
     plt.tight_layout()
+
+def plot_feature_importance(model: Union[BaseRuleEnsemble, RuleCompetingRisks],
+                          top_n: int = 10,
+                          figsize: tuple = (10, 6),
+                          title: Optional[str] = None) -> plt.Figure:
+    """
+    Plot feature importance scores for a fitted model.
+    
+    Parameters
+    ----------
+    model : BaseRuleEnsemble or RuleCompetingRisks
+        Fitted model with get_variable_importances method
+    top_n : int, default=10
+        Number of top features to plot
+    figsize : tuple, default=(10, 6)
+        Figure size
+    title : str, optional
+        Custom title for the plot. If None, a default title will be used.
+        
+    Returns
+    -------
+    matplotlib.figure.Figure
+        The figure object
+    """
+    # Get variable importances
+    importances = model.get_variable_importances()
+    
+    # Create figure
+    fig = plt.figure(figsize=figsize)
+    
+    if isinstance(model, RuleCompetingRisks):
+        # For competing risks, plot each event type separately
+        n_events = len(importances)
+        fig, axes = plt.subplots(n_events, 1, figsize=figsize, sharex=True)
+        if n_events == 1:
+            axes = [axes]
+            
+        for i, (event_type, event_importances) in enumerate(importances.items()):
+            # Get top features
+            top_features = sorted(event_importances.items(), 
+                                key=lambda x: x[1], 
+                                reverse=True)[:top_n]
+            features, scores = zip(*top_features)
+            
+            # Plot
+            axes[i].barh(range(len(features)), scores)
+            axes[i].set_yticks(range(len(features)))
+            axes[i].set_yticklabels(features)
+            axes[i].set_xlabel("Importance")
+            axes[i].set_title(f"Feature Importance - {event_type}")
+            
+        plt.tight_layout()
+        
+    else:
+        # For other models, plot a single bar chart
+        # Flatten importances if they're nested
+        if isinstance(next(iter(importances.values())), dict):
+            # For multi-state models
+            flat_importances = {}
+            for transition, trans_importances in importances.items():
+                for feature, importance in trans_importances.items():
+                    if feature not in flat_importances:
+                        flat_importances[feature] = 0
+                    flat_importances[feature] += importance
+        else:
+            # For single-state models
+            flat_importances = importances
+            
+        # Get top features
+        top_features = sorted(flat_importances.items(), 
+                            key=lambda x: x[1], 
+                            reverse=True)[:top_n]
+        features, scores = zip(*top_features)
+        
+        # Plot
+        plt.barh(range(len(features)), scores)
+        plt.yticks(range(len(features)), features)
+        plt.xlabel("Importance")
+        if title is None:
+            plt.title("Feature Importance")
+        else:
+            plt.title(title)
+        plt.tight_layout()
+    
+    return fig

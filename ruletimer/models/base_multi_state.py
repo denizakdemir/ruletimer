@@ -505,14 +505,59 @@ class RuleMultiState(BaseMultiStateModel):
         return self
         
     def get_feature_importances(self, transition: Tuple[int, int]) -> np.ndarray:
-        """Get feature importances for a specific transition."""
-        if not self.is_fitted_:
+        """
+        Get feature importances for a specific transition.
+        
+        Parameters
+        ----------
+        transition : tuple
+            The transition to get importances for
+            
+        Returns
+        -------
+        np.ndarray
+            Array of feature importances
+        """
+        if not hasattr(self, 'feature_importances_'):
             raise ValueError("Model must be fitted before getting feature importances")
             
-        if transition not in self.rule_weights_:
-            raise ValueError(f"No model for transition {transition}")
+        if transition not in self.feature_importances_:
+            raise ValueError(f"No feature importances available for transition {transition}")
             
-        return np.abs(self.rule_weights_[transition])
+        return self.feature_importances_[transition]
+
+    def get_variable_importances(self) -> Dict[Tuple[int, int], Dict[str, float]]:
+        """
+        Get the importance scores for each variable in the model for all transitions.
+        
+        Returns
+        -------
+        dict
+            Dictionary mapping transitions to dictionaries of variable importances
+        """
+        if not hasattr(self, 'feature_importances_'):
+            raise ValueError("Model must be fitted before getting variable importances")
+            
+        # Get feature names from the preprocessor if available
+        feature_names = getattr(self, 'feature_names_', 
+                              [f'feature_{i}' for i in range(len(next(iter(self.feature_importances_.values()))))])
+        
+        # Create dictionary of variable importances for each transition
+        importances = {}
+        for transition in self.state_manager.transitions:
+            if transition in self.feature_importances_:
+                # Get importances for this transition
+                transition_importances = self.feature_importances_[transition]
+                
+                # Create dictionary mapping feature names to importances
+                transition_importance_dict = dict(zip(feature_names, transition_importances))
+                
+                # Sort by importance in descending order
+                importances[transition] = dict(sorted(transition_importance_dict.items(), 
+                                                    key=lambda x: x[1], 
+                                                    reverse=True))
+        
+        return importances
 
     def predict_cumulative_incidence(
         self,

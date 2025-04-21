@@ -575,20 +575,26 @@ class RuleCompetingRisks(BaseMultiStateModel):
                 for feature, _, _ in rule:
                     n_features = max(n_features, feature + 1)
                     
-        importances = np.zeros(n_features)
+        # Initialize importances dictionary
+        importances = {}
         
         # Compute importances for each transition
         for transition in self.transition_rules_:
             rules = self.transition_rules_[transition]
             weights = self.rule_weights_[transition]
             
+            # Initialize importances for this transition
+            transition_importances = np.zeros(n_features)
+            
             for rule, weight in zip(rules, weights):
                 for feature, _, _ in rule:
-                    importances[feature] += abs(weight)
+                    transition_importances[feature] += abs(weight)
                     
-        # Normalize importances
-        if np.sum(importances) > 0:
-            importances /= np.sum(importances)
+            # Normalize importances for this transition
+            if np.sum(transition_importances) > 0:
+                transition_importances /= np.sum(transition_importances)
+                
+            importances[transition] = transition_importances
             
         return importances
 
@@ -599,43 +605,57 @@ class RuleCompetingRisks(BaseMultiStateModel):
         Parameters
         ----------
         event_type : str or int
-            Event type to get feature importances for
+            The event type to get importances for
             
         Returns
         -------
         np.ndarray
-            Feature importance values
+            Array of feature importances
         """
-        if not self.is_fitted_:
+        if not hasattr(self, 'feature_importances_'):
             raise ValueError("Model must be fitted before getting feature importances")
             
-        # Convert event type to state if it's a string
-        if isinstance(event_type, str):
-            if event_type not in self.event_types:
-                raise ValueError(f"Unknown event type: {event_type}")
-            state = self.event_type_to_state[event_type]
-        else:
-            state = event_type
-            
+        # Convert event type to state index
+        state = self.state_manager.to_internal_index(event_type)
         transition = (0, state)
-        if transition not in self.transition_rules_:
-            raise ValueError(f"No rules found for event type {event_type}")
+        
+        if transition not in self.feature_importances_:
+            raise ValueError(f"No feature importances available for event type {event_type}")
             
-        # Get rules and weights for this transition
-        rules = self.transition_rules_[transition]
-        weights = self.rule_weights_[transition]
+        return self.feature_importances_[transition]
+
+    def get_variable_importances(self) -> Dict[str, Dict[str, float]]:
+        """
+        Get the importance scores for each variable in the model for all event types.
         
-        # Get number of features from the first rule's first condition's feature index
-        n_features = max(feature for rule in rules for feature, _, _ in rule) + 1 if rules else 0
-        importances = np.zeros(n_features)
+        Returns
+        -------
+        dict
+            Dictionary mapping event types to dictionaries of variable importances
+        """
+        if not hasattr(self, 'feature_importances_'):
+            raise ValueError("Model must be fitted before getting variable importances")
+            
+        # Get feature names from the preprocessor if available
+        feature_names = getattr(self, 'feature_names_', 
+                              [f'feature_{i}' for i in range(len(next(iter(self.feature_importances_.values()))))])
         
-        # Compute feature importances
-        for rule, weight in zip(rules, weights):
-            for feature, _, _ in rule:
-                importances[feature] += abs(weight)
+        # Create dictionary of variable importances for each event type
+        importances = {}
+        for event_type in self.event_types:
+            state = self.event_type_to_state[event_type]
+            transition = (0, state)
+            
+            if transition in self.feature_importances_:
+                # Get importances for this event type
+                event_importances = self.feature_importances_[transition]
                 
-        # Normalize importances
-        if np.sum(importances) > 0:
-            importances /= np.sum(importances)
-            
+                # Create dictionary mapping feature names to importances
+                event_importance_dict = dict(zip(feature_names, event_importances))
+                
+                # Sort by importance in descending order
+                importances[event_type] = dict(sorted(event_importance_dict.items(), 
+                                                    key=lambda x: x[1], 
+                                                    reverse=True))
+        
         return importances
