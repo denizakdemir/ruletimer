@@ -814,23 +814,32 @@ from ruletimer.utils.time_utils import to_multi_state_format
 - `MultiState`: Data converted to multi-state format
 
 #### `bootstrap_confidence_intervals`
+```python
+bootstrap_confidence_intervals(
+    model,
+    X: np.ndarray,
+    y,
+    times: np.ndarray,
+    n_bootstrap: int = 100,
+    alpha: float = 0.05,
+    prediction_method: str = 'predict_state_occupation'
+) -> Dict
+```
 Calculate bootstrap confidence intervals for predictions.
 
-```python
-from ruletimer.utils.time_utils import bootstrap_confidence_intervals
-```
-
 **Parameters:**
-- `model` (BaseRuleEnsemble): Fitted model
-- `X` (array-like): Feature matrix
-- `y` (MultiState, Survival, or CompetingRisks): Time-to-event data
-- `times` (array-like): Time points for prediction
-- `n_bootstrap` (int, default=100): Number of bootstrap samples
-- `alpha` (float, default=0.05): Significance level for confidence intervals
-- `prediction_method` (str, default='predict_state_occupation'): Method to use for prediction
+- `model`: BaseRuleEnsemble - Fitted model
+- `X`: array-like - Feature matrix
+- `y`: MultiState, Survival, or CompetingRisks - Time-to-event data
+- `times`: array-like - Time points for prediction
+- `n_bootstrap`: int, default=100 - Number of bootstrap samples
+- `alpha`: float, default=0.05 - Significance level for confidence intervals
+- `prediction_method`: str, default='predict_state_occupation' - Method to use for prediction
 
 **Returns:**
-- `dict`: Dictionary containing mean predictions and confidence intervals
+- `dict`: Dictionary containing:
+  - For multi-state predictions: Dictionary mapping states to arrays of shape (n_bootstrap, n_samples, n_times)
+  - For single outcome predictions: Array of shape (n_bootstrap, n_samples, n_times)
 
 ### Importance Analysis
 
@@ -1029,11 +1038,115 @@ from ruletimer.evaluation import ModelEvaluator
 ```
 
 **Methods:**
-- `calculate_concordance_index(model, X, y)`: Calculate concordance index
-- `calculate_brier_score(model, X, y, times)`: Calculate Brier score
-- `calculate_integrated_brier_score(model, X, y, times)`: Calculate integrated Brier score
-- `calculate_calibration(model, X, y, times)`: Calculate calibration metrics
-- `calculate_discrimination(model, X, y, times)`: Calculate discrimination metrics
+
+#### `transition_concordance`
+```python
+transition_concordance(model, X, y)
+```
+Calculate concordance index for transitions in multi-state models.
+
+**Parameters:**
+- `model`: BaseRuleEnsemble - Fitted model
+- `X`: array-like - Feature matrix
+- `y`: MultiState - True multi-state outcomes
+
+**Returns:**
+- `float`: Concordance index
+
+#### `compare_models`
+```python
+compare_models(
+    models: Dict[str, Union[RuleSurvival, RuleCompetingRisks, RuleMultiState]],
+    X: Union[np.ndarray, pd.DataFrame],
+    y: Union[Survival, CompetingRisks, MultiState],
+    times: Optional[np.ndarray] = None
+) -> Dict[str, Dict[str, float]]
+```
+Compare multiple models using various metrics.
+
+**Parameters:**
+- `models`: dict - Dictionary mapping model names to fitted models
+- `X`: array-like - Feature matrix
+- `y`: Survival, CompetingRisks, or MultiState - True outcomes
+- `times`: array-like, optional - Time points for time-dependent metrics
+
+**Returns:**
+- `dict`: Dictionary containing evaluation metrics for each model
+
+#### `time_dependent_auc`
+```python
+time_dependent_auc(model, X, y, times)
+```
+Calculate time-dependent AUC for survival models.
+
+**Parameters:**
+- `model`: RuleSurvival - Fitted survival model
+- `X`: array-like - Feature matrix
+- `y`: Survival - True survival outcomes
+- `times`: array-like - Time points for evaluation
+
+**Returns:**
+- `array-like`: Time-dependent AUC values
+
+#### `time_dependent_auc_competing_risks`
+```python
+time_dependent_auc_competing_risks(model, X, y, times)
+```
+Calculate time-dependent AUC for competing risks models.
+
+**Parameters:**
+- `model`: RuleCompetingRisks - Fitted competing risks model
+- `X`: array-like - Feature matrix
+- `y`: CompetingRisks - True competing risks outcomes
+- `times`: array-like - Time points for evaluation
+
+**Returns:**
+- `dict`: Dictionary mapping event types to time-dependent AUC values
+
+#### `time_dependent_auc_multi_state`
+```python
+time_dependent_auc_multi_state(model, X, y, times)
+```
+Calculate time-dependent AUC for multi-state models.
+
+**Parameters:**
+- `model`: RuleMultiState - Fitted multi-state model
+- `X`: array-like - Feature matrix
+- `y`: MultiState - True multi-state outcomes
+- `times`: array-like - Time points for evaluation
+
+**Returns:**
+- `dict`: Dictionary mapping transitions to time-dependent AUC values
+
+### Time and Prediction Utilities
+
+#### `bootstrap_confidence_intervals`
+```python
+bootstrap_confidence_intervals(
+    model,
+    X: np.ndarray,
+    y,
+    times: np.ndarray,
+    n_bootstrap: int = 100,
+    alpha: float = 0.05,
+    prediction_method: str = 'predict_state_occupation'
+) -> Dict
+```
+Calculate bootstrap confidence intervals for predictions.
+
+**Parameters:**
+- `model`: BaseRuleEnsemble - Fitted model
+- `X`: array-like - Feature matrix
+- `y`: MultiState, Survival, or CompetingRisks - Time-to-event data
+- `times`: array-like - Time points for prediction
+- `n_bootstrap`: int, default=100 - Number of bootstrap samples
+- `alpha`: float, default=0.05 - Significance level for confidence intervals
+- `prediction_method`: str, default='predict_state_occupation' - Method to use for prediction
+
+**Returns:**
+- `dict`: Dictionary containing:
+  - For multi-state predictions: Dictionary mapping states to arrays of shape (n_bootstrap, n_samples, n_times)
+  - For single outcome predictions: Array of shape (n_bootstrap, n_samples, n_times)
 
 ## Time Handling
 
